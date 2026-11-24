@@ -1,0 +1,17 @@
+
+{
+  "name": "databridge",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=@databridge/web",
+    "dev:api": "npm run dev --workspace=@databridge/api",
+    "dev:worker": "npm run dev --workspace=@databridge/worker",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}
