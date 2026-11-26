@@ -1,121 +1,163 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import {
+  Activity,
+  Cable,
+  Compass,
+  GitBranch,
+  PlaySquare,
+  PlusSquare,
+  Settings,
+  Workflow,
+} from 'lucide-react'
+import { AppShell } from './components/layout/AppShell'
+import { WorkspaceProvider } from './components/layout/WorkspaceContext'
+import { DashboardPage } from './pages/DashboardPage'
+import { PlaceholderPage } from './pages/PlaceholderPage'
+import { SyncJobDetailPage } from './pages/SyncJobDetailPage'
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <BrowserRouter>
+      <WorkspaceProvider>
+        <AppShell>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
 
-      <div className="ticks"></div>
+            <Route
+              path="/connections"
+              element={
+                <PlaceholderPage
+                  title="Connections"
+                  description="Manage source and destination connectors across databases, APIs, and object storage."
+                  icon={Cable}
+                  plannedCapabilities={[
+                    'Connector catalog for PostgreSQL, MySQL, MongoDB, REST API, CSV, and JSON',
+                    'Connection health diagnostics and latency checks',
+                    'Scoped credential vault integration (handled securely on backend)',
+                  ]}
+                />
+              }
+            />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+            <Route
+              path="/sync-jobs"
+              element={
+                <PlaceholderPage
+                  title="Sync Jobs"
+                  description="Configure schedules, incremental cursors, and execution policies for your pipelines."
+                  icon={PlaySquare}
+                  plannedCapabilities={[
+                    'Cron and interval scheduling with backfill windows',
+                    'Idempotent checkpoint and retry policy configuration',
+                    'Real-time worker run history and batch metrics',
+                  ]}
+                />
+              }
+            />
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+            <Route
+              path="/sync-jobs/new"
+              element={
+                <PlaceholderPage
+                  title="Create Sync Job"
+                  description="Set up a new source-to-destination synchronization pipeline."
+                  icon={PlusSquare}
+                  plannedCapabilities={[
+                    'Select configured source and destination connectors',
+                    'Choose full-refresh or incremental CDC sync modes',
+                    'Attach schema mappings and validation rules before activation',
+                  ]}
+                />
+              }
+            />
+
+            <Route path="/sync-jobs/:jobId" element={<SyncJobDetailPage />} />
+
+            <Route
+              path="/data-explorer"
+              element={
+                <PlaceholderPage
+                  title="Data Explorer"
+                  description="Inspect sample payloads, source schemas, and synchronized destination tables."
+                  icon={Compass}
+                  plannedCapabilities={[
+                    'Schema introspection across registered connectors',
+                    'Read-only record sampling and type verification',
+                    'Row-level sync lineage inspection',
+                  ]}
+                />
+              }
+            />
+
+            <Route
+              path="/mapping-studio"
+              element={
+                <PlaceholderPage
+                  title="Mapping Studio"
+                  description="Map source fields to destination schemas with type coercion and validation."
+                  icon={Workflow}
+                  plannedCapabilities={[
+                    'Visual field-to-field schema mapping editor',
+                    'Nullability, default value, and schema drift rules',
+                    'Dry-run mapping preview against sample records',
+                  ]}
+                />
+              }
+            />
+
+            <Route
+              path="/transformations"
+              element={
+                <PlaceholderPage
+                  title="Transformations"
+                  description="Author reusable normalization, filtering, and enrichment transforms."
+                  icon={GitBranch}
+                  plannedCapabilities={[
+                    'Versioned field transformation pipelines',
+                    'Deterministic unit testing with sample input payloads',
+                    'Reusable expression presets for timestamps, PII masking, and JSON flattening',
+                  ]}
+                />
+              }
+            />
+
+            <Route
+              path="/activity-logs"
+              element={
+                <PlaceholderPage
+                  title="Activity Logs"
+                  description="Audit worker execution logs, schema changes, and workspace events."
+                  icon={Activity}
+                  plannedCapabilities={[
+                    'Filterable audit trail by job, connector, severity, and time window',
+                    'Structured error traces for failed batches',
+                    'Exportable compliance logs',
+                  ]}
+                />
+              }
+            />
+
+            <Route
+              path="/settings"
+              element={
+                <PlaceholderPage
+                  title="Settings"
+                  description="Configure workspace defaults, alerting thresholds, and team access."
+                  icon={Settings}
+                  plannedCapabilities={[
+                    'Workspace environment metadata and retention windows',
+                    'Failure alert channels (webhooks, Slack, email)',
+                    'API key management and role-based permissions',
+                  ]}
+                />
+              }
+            />
+
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </AppShell>
+      </WorkspaceProvider>
+    </BrowserRouter>
   )
 }
 
