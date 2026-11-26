@@ -37,9 +37,9 @@ export const MOCK_WORKSPACES: Workspace[] = [
 ]
 
 export const MOCK_USER_PROFILE = {
-  name: 'Aarav Mehta',
+  name: 'Vikas Singh',
   role: 'Staff Data Engineer',
-  email: 'aarav@databridge.dev',
+  email: 'Vikas@databridge.dev',
   initials: 'AM',
 }
 

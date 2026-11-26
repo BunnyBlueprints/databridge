@@ -1,7 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import {
   Activity,
-  Cable,
   Compass,
   GitBranch,
   PlaySquare,
@@ -11,6 +10,7 @@ import {
 } from 'lucide-react'
 import { AppShell } from './components/layout/AppShell'
 import { WorkspaceProvider } from './components/layout/WorkspaceContext'
+import { ConnectionsPage } from './pages/ConnectionsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { SyncJobDetailPage } from './pages/SyncJobDetailPage'
@@ -23,21 +23,7 @@ function App() {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
 
-            <Route
-              path="/connections"
-              element={
-                <PlaceholderPage
-                  title="Connections"
-                  description="Manage source and destination connectors across databases, APIs, and object storage."
-                  icon={Cable}
-                  plannedCapabilities={[
-                    'Connector catalog for PostgreSQL, MySQL, MongoDB, REST API, CSV, and JSON',
-                    'Connection health diagnostics and latency checks',
-                    'Scoped credential vault integration (handled securely on backend)',
-                  ]}
-                />
-              }
-            />
+            <Route path="/connections" element={<ConnectionsPage />} />
 
             <Route
               path="/sync-jobs"
