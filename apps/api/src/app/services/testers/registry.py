@@ -2,6 +2,9 @@
 
 from app.schemas.connection_test import ConnectorType
 from app.services.testers.base import ConnectorTester
+from app.services.testers.mongo_tester import MongoDbConnectionTester
+from app.services.testers.mysql_tester import MysqlConnectionTester
+from app.services.testers.postgres_tester import PostgresConnectionTester
 
 
 class ConnectorTesterRegistry:
@@ -24,10 +27,13 @@ class ConnectorTesterRegistry:
 
 
 def create_default_tester_registry() -> ConnectorTesterRegistry:
-    """Create the default tester registry.
+    """Create the default tester registry with database testers registered.
 
-    Step 2 establishes the dispatch architecture without live connector implementations;
-    testers for PostgreSQL, MySQL, MongoDB, REST API, CSV, and JSON will be registered
-    in subsequent steps.
+    Step 3 registers PostgreSQL, MySQL, and MongoDB testers.
+    REST API, CSV, and JSON remain unimplemented until Step 4.
     """
-    return ConnectorTesterRegistry()
+    registry = ConnectorTesterRegistry()
+    registry.register(PostgresConnectionTester())
+    registry.register(MysqlConnectionTester())
+    registry.register(MongoDbConnectionTester())
+    return registry

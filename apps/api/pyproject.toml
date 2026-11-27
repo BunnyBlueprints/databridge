@@ -5,9 +5,13 @@ description = "DataBridge backend API for connection testing and integration man
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "dnspython>=2.6.0",
   "fastapi>=0.115.0,<1.0.0",
+  "psycopg[binary]>=3.2.0",
   "pydantic>=2.9.0,<3.0.0",
   "pydantic-settings>=2.5.0,<3.0.0",
+  "pymongo>=4.10.0",
+  "pymysql>=1.1.0",
   "uvicorn[standard]>=0.30.0,<1.0.0",
 ]
 
@@ -40,4 +44,4 @@ select = ["E", "F", "I", "B", "UP", "S"]
 ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S105", "S106"]
+"tests/**/*.py" = ["S105", "S106", "S107"]

@@ -9,6 +9,8 @@ from app.schemas.connection_test import (
     ConnectionTestRequest,
     ConnectionTestResult,
     PostgresConnectionTestRequest,
+    RestApiConnectionTestConfig,
+    RestApiConnectionTestRequest,
     SqlConnectionTestConfig,
     SqlConnectionTestCredentials,
 )
@@ -33,16 +35,37 @@ def _sample_pg_request() -> PostgresConnectionTestRequest:
     )
 
 
+def _sample_rest_request() -> RestApiConnectionTestRequest:
+    return RestApiConnectionTestRequest(
+        connectionId="conn-rest-1",
+        connectorType="REST API",
+        config=RestApiConnectionTestConfig(
+            baseUrl="https://api.example.com/v2",
+            authType="none",
+        ),
+    )
+
+
 @pytest.mark.anyio
-async def test_default_registry_returns_tester_not_implemented() -> None:
+async def test_unimplemented_connector_returns_tester_not_implemented() -> None:
     service = ConnectionTestService(create_default_tester_registry(), timeout_seconds=5.0)
-    result, http_status = await service.test_connection(_sample_pg_request())
+    result, http_status = await service.test_connection(_sample_rest_request())
 
     assert http_status == 501
     assert result.success is False
     assert result.status == "failed"
     assert result.errorCode == "TESTER_NOT_IMPLEMENTED"
     assert result.testedAt is not None
+
+
+@pytest.mark.anyio
+async def test_empty_registry_returns_tester_not_implemented_for_database() -> None:
+    service = ConnectionTestService(ConnectorTesterRegistry(), timeout_seconds=5.0)
+    result, http_status = await service.test_connection(_sample_pg_request())
+
+    assert http_status == 501
+    assert result.success is False
+    assert result.errorCode == "TESTER_NOT_IMPLEMENTED"
 
 
 @pytest.mark.anyio
@@ -111,7 +134,7 @@ async def test_server_side_timeout_returns_504_timeout_result() -> None:
 async def test_service_never_logs_secret_credentials(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    service = ConnectionTestService(create_default_tester_registry(), timeout_seconds=5.0)
+    service = ConnectionTestService(ConnectorTesterRegistry(), timeout_seconds=5.0)
     with caplog.at_level(logging.DEBUG, logger="databridge.api"):
         await service.test_connection(_sample_pg_request())
 

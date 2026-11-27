@@ -2,14 +2,22 @@
 
 import logging
 from datetime import datetime
+from typing import Any
 
+import psycopg.errors
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
 from app.schemas.connection_test import ConnectionTestRequest, ConnectionTestResult
-from app.services.testers.registry import ConnectorTesterRegistry
+from app.services.testers.mongo_tester import MongoDbConnectionTester
+from app.services.testers.mysql_tester import MysqlConnectionTester
+from app.services.testers.postgres_tester import PostgresConnectionTester
+from app.services.testers.registry import (
+    ConnectorTesterRegistry,
+    create_default_tester_registry,
+)
 
 
 def _make_client(
@@ -32,6 +40,75 @@ def _assert_normalized_result_shape(body: dict[str, object]) -> None:
     if "testedAt" in body:
         assert isinstance(body["testedAt"], str)
         datetime.fromisoformat(body["testedAt"])
+
+
+def _make_mocked_db_registry() -> ConnectorTesterRegistry:
+    class _PgCursor:
+        async def execute(self, _q: str) -> None:
+            return None
+
+        async def fetchone(self) -> tuple[int]:
+            return (1,)
+
+        async def close(self) -> None:
+            return None
+
+    class _PgConn:
+        def cursor(self) -> _PgCursor:
+            return _PgCursor()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_pg_connect(**_kwargs: Any) -> _PgConn:
+        return _PgConn()
+
+    class _MyCursor:
+        def execute(self, _q: str) -> None:
+            return None
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+        def close(self) -> None:
+            return None
+
+    class _MyConn:
+        def cursor(self) -> _MyCursor:
+            return _MyCursor()
+
+        def close(self) -> None:
+            return None
+
+    def fake_my_connect(**_kwargs: Any) -> _MyConn:
+        return _MyConn()
+
+    class _MongoAdmin:
+        async def command(self, _cmd: str) -> dict[str, Any]:
+            return {"ok": 1.0}
+
+    class _MongoClient:
+        admin = _MongoAdmin()
+
+        async def close(self) -> None:
+            return None
+
+    registry = ConnectorTesterRegistry()
+    registry.register(PostgresConnectionTester(connect_fn=fake_pg_connect))
+    registry.register(MysqlConnectionTester(connect_fn=fake_my_connect))
+    registry.register(MongoDbConnectionTester(client_factory=lambda **_kw: _MongoClient()))
+    return registry
+
+
+def test_default_registry_registers_database_testers_only() -> None:
+    registry = create_default_tester_registry()
+    assert set(registry.registered_connectors()) == {"PostgreSQL", "MySQL", "MongoDB"}
+    assert isinstance(registry.get("PostgreSQL"), PostgresConnectionTester)
+    assert isinstance(registry.get("MySQL"), MysqlConnectionTester)
+    assert isinstance(registry.get("MongoDB"), MongoDbConnectionTester)
+    assert registry.get("REST API") is None
+    assert registry.get("CSV") is None
+    assert registry.get("JSON") is None
 
 
 @pytest.mark.parametrize(
@@ -69,6 +146,25 @@ def _assert_normalized_result_shape(body: dict[str, object]) -> None:
                 "connectionUri": "mongodb+srv://reader:transient-mongo-secret@cluster01.mongodb.net",
             },
         },
+    ],
+)
+def test_database_connectors_dispatch_and_succeed_with_verified_drivers(
+    payload: dict[str, object],
+) -> None:
+    client = _make_client(registry=_make_mocked_db_registry())
+    response = client.post("/api/v1/connections/test", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_normalized_result_shape(body)
+    assert body["success"] is True
+    assert body["status"] == "connected"
+    assert "errorCode" not in body
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
         {
             "connectorType": "REST API",
             "config": {
@@ -93,7 +189,7 @@ def _assert_normalized_result_shape(body: dict[str, object]) -> None:
         },
     ],
 )
-def test_valid_requests_for_all_connectors_return_not_implemented(
+def test_unimplemented_connectors_return_not_implemented(
     payload: dict[str, object],
 ) -> None:
     client = _make_client()
@@ -291,9 +387,17 @@ def test_credentials_do_not_appear_in_logs_or_validation_errors(
     secret_password = "ultra_secret_db_password_98765"
     secret_token = "bearer_secret_token_443322"
 
+    async def failing_pg_connect(**_kwargs: Any) -> Any:
+        raise psycopg.errors.InvalidPassword(
+            f"password authentication failed for password={secret_password}"
+        )
+
+    registry = ConnectorTesterRegistry()
+    registry.register(PostgresConnectionTester(connect_fn=failing_pg_connect))
+
     with caplog.at_level(logging.DEBUG, logger="databridge.api"):
-        client = _make_client()
-        client.post(
+        client = _make_client(registry=registry)
+        pg_resp = client.post(
             "/api/v1/connections/test",
             json={
                 "connectorType": "PostgreSQL",
@@ -315,6 +419,9 @@ def test_credentials_do_not_appear_in_logs_or_validation_errors(
             },
         )
 
+    assert pg_resp.status_code == 200
+    assert pg_resp.json()["errorCode"] == "AUTHENTICATION_FAILED"
+    assert secret_password not in pg_resp.text
     assert secret_token not in bad_resp.text
     assert secret_password not in caplog.text
     assert secret_token not in caplog.text
