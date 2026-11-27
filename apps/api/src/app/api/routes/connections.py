@@ -24,10 +24,9 @@ def get_connection_test_service(request: Request) -> ConnectionTestService:
         "then dispatches the request to the connector tester registry.\n\n"
         "**Supported connector types:** `PostgreSQL`, `MySQL`, `MongoDB`, `REST API`, "
         "`CSV`, `JSON`.\n\n"
-        "**Current status:** `PostgreSQL`, `MySQL`, and `MongoDB` execute read-only "
-        "connectivity verification (`SELECT 1` / `admin` `ping`). `REST API`, `CSV`, and "
-        "`JSON` testers are not implemented yet and return `501 Not Implemented` "
-        "(`TESTER_NOT_IMPLEMENTED`). Transient credentials are never persisted or logged."
+        "**Current status:** All six connector types are implemented (`PostgreSQL`, `MySQL`, "
+        "`MongoDB`, `REST API`, `CSV`, `JSON`). Transient credentials and transient file "
+        "contents are used strictly for the active test request and are never persisted or logged."
     ),
     responses={
         status.HTTP_200_OK: {

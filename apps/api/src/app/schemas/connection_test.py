@@ -310,18 +310,20 @@ class RestApiConnectionTestRequest(_ConnectionTestRequestBase):
 
 
 class CsvConnectionTestRequest(_ConnectionTestRequestBase):
-    """CSV connection test request payload (credentials are not accepted)."""
+    """CSV connection test request payload with transient fileContent (no credentials)."""
 
     connectorType: Literal["CSV"]
     config: CsvConnectionTestConfig
+    fileContent: str
     credentials: None = None
 
 
 class JsonConnectionTestRequest(_ConnectionTestRequestBase):
-    """JSON connection test request payload (credentials are not accepted)."""
+    """JSON connection test request payload with transient fileContent (no credentials)."""
 
     connectorType: Literal["JSON"]
     config: JsonConnectionTestConfig
+    fileContent: str
     credentials: None = None
 
 

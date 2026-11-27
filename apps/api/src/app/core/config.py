@@ -22,8 +22,10 @@ class Settings(BaseSettings):
             "http://127.0.0.1:5173",
         ]
     )
-    api_max_request_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
+    api_max_request_bytes: int = Field(default=524_288, ge=1024, le=4_194_304)
     connection_test_timeout_seconds: float = Field(default=10.0, gt=0.0, le=120.0)
+    connection_test_max_file_bytes: int = Field(default=262_144, ge=64, le=2_097_152)
+    rest_api_max_response_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
     enable_api_docs: bool = True
 
     model_config = SettingsConfigDict(

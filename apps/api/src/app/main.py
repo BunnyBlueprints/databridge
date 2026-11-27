@@ -34,14 +34,12 @@ Backend API for **DataBridge** connection testing and integration workflows.
 - `CSV`
 - `JSON`
 
-### Current Scope (Step 3)
+### Current Scope (Step 4)
 - Enforces strict connector-specific schema validation and normalized responses via
   `POST /api/v1/connections/test`.
-- Dispatches validated requests to the connector tester registry.
-- `PostgreSQL`, `MySQL`, and `MongoDB` execute read-only connectivity verification.
-- `REST API`, `CSV`, and `JSON` remain unimplemented (`501 Not Implemented`,
-  `TESTER_NOT_IMPLEMENTED`) until Step 4.
-- Transient credentials are never persisted, cached, or logged.
+- Dispatches validated requests to the connector tester registry for all six supported
+  connectors (`PostgreSQL`, `MySQL`, `MongoDB`, `REST API`, `CSV`, `JSON`).
+- Transient credentials and transient file contents are never persisted, cached, or logged.
 """.strip()
 
 
@@ -130,7 +128,10 @@ def create_app(
         openapi_url=openapi_url,
     )
 
-    resolved_registry = registry or create_default_tester_registry()
+    resolved_registry = registry or create_default_tester_registry(
+        max_file_bytes=resolved_settings.connection_test_max_file_bytes,
+        max_rest_response_bytes=resolved_settings.rest_api_max_response_bytes,
+    )
     application.state.settings = resolved_settings
     application.state.tester_registry = resolved_registry
     application.state.connection_test_service = ConnectionTestService(

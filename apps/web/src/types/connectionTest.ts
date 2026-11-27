@@ -29,6 +29,7 @@ export type KnownConnectionTestErrorCode =
   | 'TIMEOUT'
   | 'INVALID_CONFIGURATION'
   | 'UNSUPPORTED_CONNECTOR'
+  | 'TESTER_NOT_IMPLEMENTED'
   | 'SERVER_ERROR'
   | 'NETWORK_ERROR'
 
@@ -137,22 +138,33 @@ export interface RestApiConnectionTestRequest extends ConnectionTestRequestBase 
 export interface CsvConnectionTestRequest extends ConnectionTestRequestBase {
   connectorType: Extract<ConnectorType, 'CSV'>
   config: FileConnectionTestConfig
+  /**
+   * Transient CSV file contents transmitted strictly in the test request body.
+   * Never persisted in React state, localStorage, or sessionStorage.
+   */
+  fileContent: string
   credentials?: never
 }
 
 export interface JsonConnectionTestRequest extends ConnectionTestRequestBase {
   connectorType: Extract<ConnectorType, 'JSON'>
   config: FileConnectionTestConfig
+  /**
+   * Transient JSON file contents transmitted strictly in the test request body.
+   * Never persisted in React state, localStorage, or sessionStorage.
+   */
+  fileContent: string
   credentials?: never
 }
 
 /**
  * Discriminated union request payload for POST /api/v1/connections/test.
  *
- * Limitation: The current frontend does not persist passwords, API keys, bearer tokens,
- * or MongoDB URI credentials. Callers may supply transient credentials per test call;
- * when omitted for an existing connection, the backend must resolve stored credentials
- * once credential vault persistence is implemented.
+ * Limitations:
+ * - The frontend does not persist passwords, API keys, bearer tokens, or MongoDB URI
+ *   credentials. Callers may supply transient credentials per test call.
+ * - CSV and JSON tests transmit transient `fileContent` to the backend solely for
+ *   the active test request and never retain file content after the request completes.
  */
 export type ConnectionTestRequest =
   | PostgresConnectionTestRequest

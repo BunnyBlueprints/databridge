@@ -27,6 +27,7 @@ export interface ConnectionDetailsModalProps {
   connection: Connection | null
   onClose: () => void
   onEdit?: (connection: Connection) => void
+  onTestConnection?: (connection: Connection) => void
 }
 
 const STATUS_STYLE: Record<
@@ -190,6 +191,7 @@ export function ConnectionDetailsModal({
   connection,
   onClose,
   onEdit,
+  onTestConnection,
 }: ConnectionDetailsModalProps) {
   if (!connection) return null
   return (
@@ -198,6 +200,7 @@ export function ConnectionDetailsModal({
       connection={connection}
       onClose={onClose}
       onEdit={onEdit}
+      onTestConnection={onTestConnection}
     />
   )
 }
@@ -206,10 +209,12 @@ function ConnectionDetailsDialog({
   connection,
   onClose,
   onEdit,
+  onTestConnection,
 }: {
   connection: Connection
   onClose: () => void
   onEdit?: (connection: Connection) => void
+  onTestConnection?: (connection: Connection) => void
 }) {
   const [actionNotice, setActionNotice] = useState<string | null>(null)
 
@@ -440,11 +445,15 @@ function ConnectionDetailsDialog({
             <Button
               variant="secondary"
               size="sm"
-              onClick={() =>
+              onClick={() => {
+                if (onTestConnection) {
+                  onTestConnection(connection)
+                  return
+                }
                 setActionNotice(
                   'Test Connection is not implemented yet. No live network or database check was performed.',
                 )
-              }
+              }}
             >
               <PlugZap className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Test Connection</span>

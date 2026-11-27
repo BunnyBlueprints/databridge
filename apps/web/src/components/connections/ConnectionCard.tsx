@@ -111,6 +111,12 @@ export function ConnectionCard({
       return
     }
 
+    if (action === 'test' && onTestConnection) {
+      setPlaceholderNotice(null)
+      onTestConnection(connection)
+      return
+    }
+
     switch (action) {
       case 'view':
       case 'edit':

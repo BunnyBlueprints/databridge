@@ -25,6 +25,8 @@ const SAFE_ERROR_MESSAGES: Record<KnownConnectionTestErrorCode, string> = {
     'The connection configuration is invalid or incomplete.',
   UNSUPPORTED_CONNECTOR:
     'This connector type is not supported by the connection test service.',
+  TESTER_NOT_IMPLEMENTED:
+    'Connection testing for this connector type is not implemented yet.',
   SERVER_ERROR:
     'The connection test service encountered an unexpected error. Please try again.',
   NETWORK_ERROR:
@@ -202,6 +204,10 @@ function buildSerializedRequestBody(request: ConnectionTestRequest): string {
 
   if (request.connectionId && request.connectionId.trim().length > 0) {
     base.connectionId = request.connectionId.trim()
+  }
+
+  if (request.connectorType === 'CSV' || request.connectorType === 'JSON') {
+    base.fileContent = request.fileContent
   }
 
   if (request.credentials) {

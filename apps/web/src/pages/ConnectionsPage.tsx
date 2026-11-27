@@ -4,6 +4,7 @@ import { AddConnectionModal } from '../components/connections/AddConnectionModal
 import { ConnectionCard } from '../components/connections/ConnectionCard'
 import { ConnectionDetailsModal } from '../components/connections/ConnectionDetailsModal'
 import { DeleteConnectionDialog } from '../components/connections/DeleteConnectionDialog'
+import { TestConnectionModal } from '../components/connections/TestConnectionModal'
 import { Button } from '../components/ui/Button'
 import { Card, CardContent } from '../components/ui/Card'
 import { MOCK_CONNECTIONS } from '../data/mockConnections'
@@ -33,6 +34,8 @@ export function ConnectionsPage() {
   const [editingConnection, setEditingConnection] =
     useState<Connection | null>(null)
   const [selectedConnection, setSelectedConnection] =
+    useState<Connection | null>(null)
+  const [testingConnection, setTestingConnection] =
     useState<Connection | null>(null)
   const [deletingConnection, setDeletingConnection] =
     useState<Connection | null>(null)
@@ -90,8 +93,16 @@ export function ConnectionsPage() {
 
   const handleStartEdit = (connection: Connection) => {
     setSelectedConnection(null)
+    setTestingConnection(null)
     setIsAddModalOpen(false)
     setEditingConnection(connection)
+  }
+
+  const handleStartTest = (connection: Connection) => {
+    setSelectedConnection(null)
+    setIsAddModalOpen(false)
+    setEditingConnection(null)
+    setTestingConnection(connection)
   }
 
   const handleUpdateConnection = (updatedConnection: Connection) => {
@@ -116,6 +127,9 @@ export function ConnectionsPage() {
       prev?.id === connectionToDelete.id ? null : prev,
     )
     setEditingConnection((prev) =>
+      prev?.id === connectionToDelete.id ? null : prev,
+    )
+    setTestingConnection((prev) =>
       prev?.id === connectionToDelete.id ? null : prev,
     )
     setFeedbackBanner({
@@ -298,6 +312,7 @@ export function ConnectionsPage() {
               connection={connection}
               onViewDetails={setSelectedConnection}
               onEdit={handleStartEdit}
+              onTestConnection={handleStartTest}
               onDelete={setDeletingConnection}
             />
           ))}
@@ -323,6 +338,12 @@ export function ConnectionsPage() {
         connection={selectedConnection}
         onClose={() => setSelectedConnection(null)}
         onEdit={handleStartEdit}
+        onTestConnection={handleStartTest}
+      />
+
+      <TestConnectionModal
+        connection={testingConnection}
+        onClose={() => setTestingConnection(null)}
       />
 
       <DeleteConnectionDialog
