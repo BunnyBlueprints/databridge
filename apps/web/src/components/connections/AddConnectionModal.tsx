@@ -1,25 +1,31 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { X } from 'lucide-react'
-import type { Connection } from '../../types/connection'
-import type { ConnectorType } from '../../types/dashboard'
-import { Button } from '../ui/Button'
-import { ConnectorIcon } from '../ui/ConnectorIcon'
-import { ConnectorConfigFields } from './ConnectorConfigFields'
+import { AlertCircle, Loader2, X } from 'lucide-react'
+import { ConnectionApiClientError } from '../../services/connectionService.ts'
+import type {
+  Connection,
+  CreateConnectionPayload,
+  UpdateConnectionPayload,
+} from '../../types/connection.ts'
+import type { ConnectorType } from '../../types/dashboard.ts'
+import { Button } from '../ui/Button.tsx'
+import { ConnectorIcon } from '../ui/ConnectorIcon.tsx'
+import { ConnectorConfigFields } from './ConnectorConfigFields.tsx'
 import {
   CONNECTOR_TYPES,
-  buildConnectionFromForm,
-  buildUpdatedConnectionFromForm,
+  buildCreateConnectionPayload,
+  buildUpdateConnectionPayload,
   createFormValuesFromConnection,
   createInitialFormValues,
   getDefaultPort,
+  stripSensitiveFormValues,
   validateConnectorForm,
-} from './connectorForm'
+} from './connectorForm.ts'
 import type {
   ConnectionFormMode,
   ConnectorFormValues,
   FormErrors,
-} from './connectorForm'
+} from './connectorForm.ts'
 
 export type AddConnectionModalProps =
   | {
@@ -27,16 +33,22 @@ export type AddConnectionModalProps =
       mode?: 'create'
       initialConnection?: undefined
       onClose: () => void
-      onCreateConnection: (connection: Connection) => void
-      onUpdateConnection?: (connection: Connection) => void
+      onCreateConnection: (payload: CreateConnectionPayload) => Promise<void>
+      onUpdateConnection?: (
+        connectionId: string,
+        payload: UpdateConnectionPayload,
+      ) => Promise<void>
     }
   | {
       isOpen: boolean
       mode: 'edit'
       initialConnection: Connection | null
       onClose: () => void
-      onCreateConnection?: (connection: Connection) => void
-      onUpdateConnection: (connection: Connection) => void
+      onCreateConnection?: (payload: CreateConnectionPayload) => Promise<void>
+      onUpdateConnection: (
+        connectionId: string,
+        payload: UpdateConnectionPayload,
+      ) => Promise<void>
     }
 
 export function AddConnectionModal({
@@ -77,8 +89,11 @@ function ConnectionFormDialog({
   mode: ConnectionFormMode
   initialConnection: Connection | null
   onClose: () => void
-  onCreateConnection?: (connection: Connection) => void
-  onUpdateConnection?: (connection: Connection) => void
+  onCreateConnection?: (payload: CreateConnectionPayload) => Promise<void>
+  onUpdateConnection?: (
+    connectionId: string,
+    payload: UpdateConnectionPayload,
+  ) => Promise<void>
 }) {
   const isEdit = mode === 'edit' && initialConnection !== null
 
@@ -88,26 +103,43 @@ function ConnectionFormDialog({
       : createInitialFormValues('PostgreSQL'),
   )
   const [errors, setErrors] = useState<FormErrors>({})
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
   const nameInputRef = useRef<HTMLInputElement>(null)
+  const isSubmittingRef = useRef(false)
+  const isMountedRef = useRef(true)
+
+  const handleRequestClose = useCallback(() => {
+    if (isSubmittingRef.current) return
+    setValues((prev) => stripSensitiveFormValues(prev))
+    setSubmitError(null)
+    onClose()
+  }, [onClose])
 
   useEffect(() => {
+    isMountedRef.current = true
     nameInputRef.current?.focus()
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose()
+        handleRequestClose()
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+    return () => {
+      isMountedRef.current = false
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [handleRequestClose])
 
   const handleFieldChange = <K extends keyof ConnectorFormValues>(
     field: K,
     value: ConnectorFormValues[K],
   ) => {
     setValues((prev) => ({ ...prev, [field]: value }))
+    setSubmitError(null)
     setErrors((prev) => {
       if (!prev[field]) return prev
       const next = { ...prev }
@@ -117,7 +149,7 @@ function ConnectionFormDialog({
   }
 
   const handleConnectorTypeChange = (nextType: ConnectorType) => {
-    if (isEdit) return
+    if (isEdit || isSubmitting) return
 
     setValues((prev) => ({
       ...createInitialFormValues(nextType),
@@ -125,11 +157,16 @@ function ConnectionFormDialog({
       description: prev.description,
       port: getDefaultPort(nextType),
     }))
+    setSubmitError(null)
     setErrors((prev) => (prev.name ? { name: prev.name } : {}))
   }
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+
+    if (isSubmittingRef.current) {
+      return
+    }
 
     const validationErrors = validateConnectorForm(values, {
       mode,
@@ -140,18 +177,36 @@ function ConnectionFormDialog({
       return
     }
 
-    if (isEdit) {
-      const updatedConnection = buildUpdatedConnectionFromForm(
-        values,
-        initialConnection,
-      )
-      onUpdateConnection?.(updatedConnection)
-    } else {
-      const createdConnection = buildConnectionFromForm(values)
-      onCreateConnection?.(createdConnection)
-    }
+    setSubmitError(null)
+    setIsSubmitting(true)
+    isSubmittingRef.current = true
 
-    onClose()
+    try {
+      if (isEdit) {
+        const payload = buildUpdateConnectionPayload(values, initialConnection)
+        await onUpdateConnection?.(initialConnection.id, payload)
+      } else {
+        const payload = buildCreateConnectionPayload(values)
+        await onCreateConnection?.(payload)
+      }
+
+      if (!isMountedRef.current) return
+      setValues((prev) => stripSensitiveFormValues(prev))
+      isSubmittingRef.current = false
+      setIsSubmitting(false)
+      onClose()
+    } catch (error) {
+      if (!isMountedRef.current) return
+      isSubmittingRef.current = false
+      setIsSubmitting(false)
+      if (error instanceof ConnectionApiClientError) {
+        setSubmitError(error.message)
+      } else {
+        setSubmitError(
+          'Unable to save this connection. Verify the configuration and try again.',
+        )
+      }
+    }
   }
 
   return (
@@ -165,7 +220,7 @@ function ConnectionFormDialog({
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-zinc-950/40 transition-opacity dark:bg-zinc-950/70"
-        onClick={onClose}
+        onClick={handleRequestClose}
       />
 
       {/* Modal panel */}
@@ -187,19 +242,20 @@ function ConnectionFormDialog({
               className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400"
             >
               {isEdit
-                ? `Update configuration for ${initialConnection.name}. Stored credentials remain hidden.`
-                : 'Configure a connector in this workspace. Credentials are not transmitted or tested in this frontend prototype.'}
+                ? `Update configuration for ${initialConnection.name}. Stored credentials remain encrypted on the backend.`
+                : 'Configure a persistent connector. Credentials are encrypted by the backend and never saved in the browser.'}
             </p>
           </div>
           <button
             type="button"
-            onClick={onClose}
+            disabled={isSubmitting}
+            onClick={handleRequestClose}
             aria-label={
               isEdit
                 ? 'Close Edit Connection modal'
                 : 'Close Add Connection modal'
             }
-            className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:outline-none dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+            className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
           >
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -212,6 +268,19 @@ function ConnectionFormDialog({
           className="flex min-h-0 flex-1 flex-col"
         >
           <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+            {submitError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md border border-rose-200/90 bg-rose-50/80 px-3 py-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200"
+              >
+                <AlertCircle
+                  className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400"
+                  aria-hidden="true"
+                />
+                <span>{submitError}</span>
+              </div>
+            )}
+
             {/* Common fields */}
             <div className="space-y-3">
               <div>
@@ -228,12 +297,13 @@ function ConnectionFormDialog({
                   ref={nameInputRef}
                   id="conn-name"
                   type="text"
+                  disabled={isSubmitting}
                   value={values.name}
                   onChange={(e) => handleFieldChange('name', e.target.value)}
                   placeholder="prod-analytics-pg"
                   aria-invalid={Boolean(errors.name)}
                   aria-describedby={errors.name ? 'conn-name-error' : undefined}
-                  className={`h-9 w-full rounded-md border bg-white px-3 text-xs text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.03)] placeholder:text-zinc-400 focus:ring-1 focus:outline-none dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 ${
+                  className={`h-9 w-full rounded-md border bg-white px-3 text-xs text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.03)] placeholder:text-zinc-400 focus:ring-1 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-50 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 ${
                     errors.name
                       ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-500 dark:border-rose-700'
                       : 'border-zinc-200 focus:border-emerald-600 focus:ring-emerald-600 dark:border-zinc-700 dark:focus:border-emerald-500'
@@ -276,7 +346,7 @@ function ConnectionFormDialog({
                       <button
                         key={type}
                         type="button"
-                        disabled={isEdit && !selected}
+                        disabled={isSubmitting || (isEdit && !selected)}
                         onClick={() => handleConnectorTypeChange(type)}
                         aria-pressed={selected}
                         className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:outline-none ${
@@ -306,12 +376,13 @@ function ConnectionFormDialog({
                 <textarea
                   id="conn-description"
                   rows={2}
+                  disabled={isSubmitting}
                   value={values.description}
                   onChange={(e) =>
                     handleFieldChange('description', e.target.value)
                   }
                   placeholder="Optional summary of what data this connector provides"
-                  className="w-full resize-none rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.03)] placeholder:text-zinc-400 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+                  className="w-full resize-none rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.03)] placeholder:text-zinc-400 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500"
                 />
               </div>
             </div>
@@ -326,6 +397,7 @@ function ConnectionFormDialog({
                 errors={errors}
                 mode={mode}
                 existingConnection={initialConnection}
+                disabled={isSubmitting}
                 onFieldChange={handleFieldChange}
               />
             </div>
@@ -336,11 +408,11 @@ function ConnectionFormDialog({
             <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
               {isEdit ? (
                 <>
-                  Status{' '}
+                  Metadata edits keep status{' '}
                   <strong className="font-medium text-zinc-700 dark:text-zinc-200">
                     {initialConnection.status}
-                  </strong>{' '}
-                  and ID will be preserved
+                  </strong>
+                  ; config or credential changes reset status to Disconnected
                 </>
               ) : (
                 <>
@@ -352,11 +424,31 @@ function ConnectionFormDialog({
               )}
             </span>
             <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={onClose}>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isSubmitting}
+                onClick={handleRequestClose}
+              >
                 Cancel
               </Button>
-              <Button variant="primary" size="sm" type="submit">
-                {isEdit ? 'Save Changes' : 'Save Connection'}
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2
+                      className="h-3.5 w-3.5 animate-spin"
+                      aria-hidden="true"
+                    />
+                    <span>{isEdit ? 'Saving…' : 'Creating…'}</span>
+                  </>
+                ) : (
+                  <span>{isEdit ? 'Save Changes' : 'Save Connection'}</span>
+                )}
               </Button>
             </div>
           </div>

@@ -72,7 +72,7 @@ export function createInitialTestValues(
           ? String(d.port)
           : (parsed.port ?? getDefaultPort(connection.type))
       values.database = d?.database ?? parsed.database ?? ''
-      values.username = d?.username ?? ''
+      values.username = ''
       break
     }
 
@@ -93,7 +93,7 @@ export function createInitialTestValues(
           ? `mongodb+srv://${withoutDb}`
           : withoutDb
       values.mongoDatabase = database
-      values.mongoUsername = d?.username ?? ''
+      values.mongoUsername = ''
       break
     }
 

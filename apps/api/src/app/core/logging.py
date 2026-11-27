@@ -3,18 +3,21 @@
 import logging
 import re
 
-_URI_CREDS_RE = re.compile(r"://[^/@\s]+@")
-_BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+_URI_CREDS_RE = re.compile(r"://[^\s/]+@")
+_BEARER_RE = re.compile(r"\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 _KV_SECRET_RE = re.compile(
-    r"\b(password|passwd|secret|token|api[_-]?key|bearerToken|connectionUri)\s*[:=]\s*\S+",
+    r"\b(password|passwd|pwd|secret|token|api[_-]?key|x-api-key|bearerToken|authorization|"
+    r"access[_-]?token|refresh[_-]?token|client[_-]?secret|connectionUri|dsn|conninfo|"
+    r"credential_encryption_keys)\s*[:=]\s*"
+    r'(?:"[^"]*"|\'[^\']*\'|[^\s,;\}\]]+)',
     re.IGNORECASE,
 )
 
 
 def redact_sensitive_text(text: str) -> str:
-    """Scrub common secret patterns from log strings."""
+    """Scrub common secret patterns from log strings and sanitized error messages."""
     redacted = _URI_CREDS_RE.sub("://[REDACTED]@", text)
-    redacted = _BEARER_RE.sub("Bearer [REDACTED]", redacted)
+    redacted = _BEARER_RE.sub("[REDACTED]", redacted)
     redacted = _KV_SECRET_RE.sub(r"\1=[REDACTED]", redacted)
     return redacted
 

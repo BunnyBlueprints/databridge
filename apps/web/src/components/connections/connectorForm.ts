@@ -1,5 +1,13 @@
-import type { Connection, ConnectionAuthType } from '../../types/connection'
-import type { ConnectorType } from '../../types/dashboard'
+import type {
+  Connection,
+  ConnectionAuthType,
+  ConnectionNonSecretConfig,
+  CreateConnectionPayload,
+  CredentialAction,
+  FilePersistentConfig,
+  UpdateConnectionPayload,
+} from '../../types/connection.ts'
+import type { ConnectorType } from '../../types/dashboard.ts'
 
 export type RestAuthType = ConnectionAuthType
 
@@ -19,13 +27,14 @@ export interface ConnectorFormValues {
   mongoUri: string
   mongoDatabase: string
   mongoUsername: string
-  mongoReplaceCredentials: string
+  mongoPassword: string
+  clearCredentials: boolean
   // REST API
   baseUrl: string
   authType: RestAuthType
   apiKey: string
   bearerToken: string
-  // CSV / JSON
+  // CSV / JSON (bare filename only; file content is never persisted)
   fileName: string
 }
 
@@ -51,7 +60,7 @@ export function getDefaultPort(type: ConnectorType): string {
 }
 
 export function sanitizeDisplayEndpoint(raw: string): string {
-  return raw.replace(/:\/\/[^/@]+@/, '://')
+  return raw.replace(/:\/\/[^\s/]+@/, '://')
 }
 
 export function parseSqlEndpoint(endpoint: string): {
@@ -102,7 +111,8 @@ export function createInitialFormValues(
     mongoUri: '',
     mongoDatabase: '',
     mongoUsername: '',
-    mongoReplaceCredentials: '',
+    mongoPassword: '',
+    clearCredentials: false,
     baseUrl: '',
     authType: 'none',
     apiKey: '',
@@ -116,6 +126,7 @@ export function createFormValuesFromConnection(
 ): ConnectorFormValues {
   const base = createInitialFormValues(connection.type)
   const d = connection.details
+  const cfg = connection.config
 
   base.name = connection.name
   base.description = connection.description ?? ''
@@ -123,27 +134,31 @@ export function createFormValuesFromConnection(
   switch (connection.type) {
     case 'PostgreSQL':
     case 'MySQL': {
+      const sqlCfg = cfg && 'host' in cfg ? cfg : undefined
       const parsed = parseSqlEndpoint(connection.endpoint)
-      base.host = d?.host ?? parsed.host ?? ''
+      base.host = sqlCfg?.host ?? d?.host ?? parsed.host ?? ''
       base.port =
-        d?.port !== undefined
-          ? String(d.port)
-          : (parsed.port ?? getDefaultPort(connection.type))
-      base.database = d?.database ?? parsed.database ?? ''
-      base.username = d?.username ?? ''
-      // Never prepopulate password; leave empty for optional replacement.
+        sqlCfg?.port !== undefined
+          ? String(sqlCfg.port)
+          : d?.port !== undefined
+            ? String(d.port)
+            : (parsed.port ?? getDefaultPort(connection.type))
+      base.database = sqlCfg?.database ?? d?.database ?? parsed.database ?? ''
+      // Security: Never prefill stored username or password from backend.
+      base.username = ''
       base.password = ''
       break
     }
 
     case 'MongoDB': {
+      const mongoCfg = cfg && 'uri' in cfg ? cfg : undefined
       const parsed = parseMongoEndpoint(connection.endpoint)
-      const database = d?.database ?? parsed.database ?? ''
+      const database = mongoCfg?.database ?? d?.database ?? parsed.database ?? ''
       const rawUri = sanitizeDisplayEndpoint(
-        d?.sanitizedUri ?? parsed.sanitizedUri,
+        mongoCfg?.uri ?? d?.sanitizedUri ?? parsed.sanitizedUri,
       )
       const withoutDb =
-        database && rawUri.endsWith(`/${database}`)
+        !mongoCfg?.uri && database && rawUri.endsWith(`/${database}`)
           ? rawUri.slice(0, -(`/${database}`.length))
           : rawUri
       base.mongoUri =
@@ -153,15 +168,20 @@ export function createFormValuesFromConnection(
           ? `mongodb+srv://${withoutDb}`
           : withoutDb
       base.mongoDatabase = database
-      base.mongoUsername = d?.username ?? ''
-      base.mongoReplaceCredentials = ''
+      // Security: Never prefill stored MongoDB username or password.
+      base.mongoUsername = ''
+      base.mongoPassword = ''
+      base.clearCredentials = false
       break
     }
 
     case 'REST API': {
-      base.baseUrl = sanitizeDisplayEndpoint(d?.baseUrl ?? connection.endpoint)
-      base.authType = d?.authType ?? 'none'
-      // Never prepopulate API key or bearer token.
+      const restCfg = cfg && 'baseUrl' in cfg ? cfg : undefined
+      base.baseUrl = sanitizeDisplayEndpoint(
+        restCfg?.baseUrl ?? d?.baseUrl ?? connection.endpoint,
+      )
+      base.authType = restCfg?.authType ?? d?.authType ?? 'none'
+      // Never prefill API key or bearer token.
       base.apiKey = ''
       base.bearerToken = ''
       break
@@ -169,7 +189,12 @@ export function createFormValuesFromConnection(
 
     case 'CSV':
     case 'JSON': {
-      base.fileName = d?.fileName ?? extractFileName(connection.endpoint) ?? ''
+      const fileCfg = cfg && 'fileName' in cfg ? cfg : undefined
+      base.fileName =
+        fileCfg?.fileName ??
+        d?.fileName ??
+        extractFileName(connection.endpoint) ??
+        ''
       break
     }
   }
@@ -180,26 +205,59 @@ export function createFormValuesFromConnection(
 function isValidHttpUrl(raw: string): boolean {
   try {
     const parsed = new URL(raw)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      !parsed.username &&
+      !parsed.password
+    )
   } catch {
     return false
   }
 }
 
-function isValidMongoUri(raw: string): boolean {
+function hasEmbeddedUriCredentials(raw: string): boolean {
+  return /:\/\/[^\s/]+@/.test(raw.trim())
+}
+
+function isValidMongoBaseUri(raw: string): boolean {
   const trimmed = raw.trim()
-  return (
-    (trimmed.startsWith('mongodb://') ||
-      trimmed.startsWith('mongodb+srv://')) &&
-    trimmed.length > 'mongodb://'.length
+  if (
+    !(
+      trimmed.startsWith('mongodb://') ||
+      trimmed.startsWith('mongodb+srv://')
+    ) ||
+    trimmed.length <= 'mongodb://'.length
+  ) {
+    return false
+  }
+  return !/\s/.test(trimmed)
+}
+
+function hasSensitiveMongoQueryParam(raw: string): boolean {
+  const queryStart = raw.indexOf('?')
+  if (queryStart === -1) return false
+  const query = raw.slice(queryStart + 1)
+  return /(^|&)(password|passwd|pwd|secret|token|api_key|apikey|bearer|bearertoken|access_token|refresh_token|aws_session_token)=/i.test(
+    query,
   )
 }
 
-function sanitizeMongoEndpoint(rawUri: string, database: string): string {
-  // Strip any embedded userinfo (username:password@) before exposing endpoint in UI.
-  const withoutCredentials = rawUri.trim().replace(/:\/\/[^/@]+@/, '://')
-  const trimmedBase = withoutCredentials.replace(/\/+$/, '')
-  return `${trimmedBase}/${database.trim()}`
+function isValidBareFileName(raw: string, expectedExt: '.csv' | '.json'): boolean {
+  const trimmed = raw.trim()
+  const lower = trimmed.toLowerCase()
+  if (!trimmed || !lower.endsWith(expectedExt)) return false
+  if (
+    trimmed.includes('/') ||
+    trimmed.includes('\\') ||
+    trimmed.includes(':') ||
+    trimmed.includes('..') ||
+    trimmed.startsWith('~') ||
+    lower.includes('%2f') ||
+    lower.includes('%5c')
+  ) {
+    return false
+  }
+  return true
 }
 
 export function validateConnectorForm(
@@ -213,13 +271,18 @@ export function validateConnectorForm(
 
   if (!values.name.trim()) {
     errors.name = 'Connection name is required.'
+  } else if (values.name.trim().length > 120) {
+    errors.name = 'Connection name must be 120 characters or fewer.'
   }
 
   switch (values.type) {
     case 'PostgreSQL':
     case 'MySQL': {
-      if (!values.host.trim()) {
+      const host = values.host.trim()
+      if (!host) {
         errors.host = 'Host is required.'
+      } else if (/[/@?#\s]|:\/\//.test(host)) {
+        errors.host = 'Enter a hostname or IP without scheme, path, or credentials.'
       }
 
       const trimmedPort = values.port.trim()
@@ -237,25 +300,34 @@ export function validateConnectorForm(
       if (!values.database.trim()) {
         errors.database = 'Database name is required.'
       }
-      if (!values.username.trim()) {
-        errors.username = 'Username is required.'
-      }
 
-      const hasExistingPassword =
-        isEdit && existing?.details?.authConfigured !== false
-      if (!hasExistingPassword && !values.password) {
-        errors.password = 'Password is required.'
+      const trimmedUser = values.username.trim()
+      if (!isEdit) {
+        if (!trimmedUser) {
+          errors.username = 'Username is required.'
+        }
+      } else if (values.password.length > 0 && !trimmedUser) {
+        errors.username =
+          'Username is required when replacing SQL credentials.'
       }
       break
     }
 
     case 'MongoDB': {
-      if (!values.mongoUri.trim()) {
+      const uri = values.mongoUri.trim()
+      if (!uri) {
         errors.mongoUri = 'Connection URI is required.'
-      } else if (!isValidMongoUri(values.mongoUri)) {
+      } else if (!isValidMongoBaseUri(uri)) {
         errors.mongoUri =
-          'URI must start with mongodb:// or mongodb+srv://.'
+          'URI must start with mongodb:// or mongodb+srv:// and contain no spaces.'
+      } else if (hasEmbeddedUriCredentials(uri)) {
+        errors.mongoUri =
+          'URI must not contain embedded credentials; enter username and password below.'
+      } else if (hasSensitiveMongoQueryParam(uri)) {
+        errors.mongoUri =
+          'URI must not include secret query parameters.'
       }
+
       if (!values.mongoDatabase.trim()) {
         errors.mongoDatabase = 'Database name is required.'
       }
@@ -263,10 +335,12 @@ export function validateConnectorForm(
     }
 
     case 'REST API': {
-      if (!values.baseUrl.trim()) {
+      const url = values.baseUrl.trim()
+      if (!url) {
         errors.baseUrl = 'Base URL is required.'
-      } else if (!isValidHttpUrl(values.baseUrl.trim())) {
-        errors.baseUrl = 'Enter a valid http:// or https:// URL.'
+      } else if (!isValidHttpUrl(url)) {
+        errors.baseUrl =
+          'Enter a valid http:// or https:// URL without embedded credentials.'
       }
 
       const keepingExistingApiKey =
@@ -301,8 +375,8 @@ export function validateConnectorForm(
       const expectedExt = values.type === 'CSV' ? '.csv' : '.json'
       if (!values.fileName.trim()) {
         errors.fileName = `Select a ${expectedExt} file to configure this source.`
-      } else if (!values.fileName.toLowerCase().endsWith(expectedExt)) {
-        errors.fileName = `Selected file must have a ${expectedExt} extension.`
+      } else if (!isValidBareFileName(values.fileName, expectedExt)) {
+        errors.fileName = `Enter a valid ${expectedExt} filename without local paths.`
       }
       break
     }
@@ -311,166 +385,240 @@ export function validateConnectorForm(
   return errors
 }
 
-function createConnectionId(name: string): string {
-  const slug =
-    name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 20) || 'source'
-
-  const suffix =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID().slice(0, 8)
-      : Date.now().toString(36)
-
-  return `conn-${slug}-${suffix}`
-}
-
-function buildEndpointAndDetails(
+function buildPersistentConfig(
   values: ConnectorFormValues,
   existing?: Connection | null,
-): { endpoint: string; details: NonNullable<Connection['details']> } {
+): ConnectionNonSecretConfig {
   switch (values.type) {
     case 'PostgreSQL':
-    case 'MySQL': {
-      const host = values.host.trim()
-      const port = Number(values.port.trim())
-      const database = values.database.trim()
-      const username = values.username.trim()
-      const preservedAuth =
-        existing?.details?.authConfigured ?? (Boolean(values.password) || undefined)
-
+    case 'MySQL':
       return {
-        endpoint: `${host}:${port}/${database}`,
-        details: {
-          host,
-          port,
-          database,
-          username,
-          authConfigured: values.password ? true : preservedAuth,
-        },
+        host: values.host.trim(),
+        port: Number(values.port.trim()),
+        database: values.database.trim(),
       }
-    }
 
-    case 'MongoDB': {
-      const database = values.mongoDatabase.trim()
-      const username = values.mongoUsername.trim()
-      const endpoint = sanitizeMongoEndpoint(values.mongoUri, database)
-      const hasReplacementCredentials =
-        Boolean(values.mongoReplaceCredentials.trim()) ||
-        /:\/\/[^/@]+@/.test(values.mongoUri)
-
+    case 'MongoDB':
       return {
-        endpoint,
-        details: {
-          sanitizedUri: endpoint,
-          database,
-          ...(username ? { username } : {}),
-          authConfigured: hasReplacementCredentials
-            ? true
-            : (existing?.details?.authConfigured ??
-              (Boolean(username) || undefined)),
-        },
-      }
-    }
-
-    case 'REST API': {
-      const parsed = new URL(values.baseUrl.trim())
-      const endpoint = `${parsed.origin}${parsed.pathname === '/' ? '' : parsed.pathname}`
-
-      const hadNoPriorAuthType =
-        existing !== undefined &&
-        existing !== null &&
-        existing.details?.authType === undefined
-
-      if (hadNoPriorAuthType && values.authType === 'none') {
-        return {
-          endpoint,
-          details: {
-            baseUrl: endpoint,
-            authType: existing.details?.authType,
-            authConfigured: existing.details?.authConfigured,
-          },
-        }
+        uri: values.mongoUri.trim(),
+        database: values.mongoDatabase.trim(),
       }
 
-      const authConfigured =
-        values.authType === 'none'
-          ? false
-          : values.authType === 'api_key'
-            ? Boolean(values.apiKey.trim()) ||
-              (existing?.details?.authType === 'api_key' &&
-                existing.details.authConfigured === true)
-            : Boolean(values.bearerToken.trim()) ||
-              (existing?.details?.authType === 'bearer' &&
-                existing.details.authConfigured === true)
-
+    case 'REST API':
       return {
-        endpoint,
-        details: {
-          baseUrl: endpoint,
-          authType: values.authType,
-          authConfigured,
-        },
+        baseUrl: values.baseUrl.trim(),
+        authType: values.authType,
       }
-    }
 
     case 'CSV':
     case 'JSON': {
       const fileName = values.fileName.trim()
-      const prevFileName =
-        existing?.details?.fileName ??
-        (existing ? extractFileName(existing.endpoint) : undefined)
-      const keepExistingEndpoint =
-        existing &&
-        prevFileName === fileName &&
-        !existing.endpoint.startsWith('local://')
+      const existingFileCfg =
+        existing?.config && 'fileName' in existing.config
+          ? existing.config
+          : undefined
+      const safeExistingEndpoint =
+        existingFileCfg?.endpoint &&
+        !existingFileCfg.endpoint.startsWith('local://')
+          ? existingFileCfg.endpoint
+          : undefined
 
-      return {
-        endpoint: keepExistingEndpoint ? existing.endpoint : `local://${fileName}`,
-        details: {
-          fileName,
-          authConfigured: existing?.details?.authConfigured ?? false,
-        },
+      const fileCfg: FilePersistentConfig = {
+        fileName,
+        ...(safeExistingEndpoint &&
+        existingFileCfg?.fileName === fileName
+          ? { endpoint: safeExistingEndpoint }
+          : {}),
       }
+      return fileCfg
     }
   }
 }
 
-export function buildConnectionFromForm(values: ConnectorFormValues): Connection {
-  const { endpoint, details } = buildEndpointAndDetails(values)
-  const trimmedDescription = values.description.trim()
+export function buildCreateConnectionPayload(
+  values: ConnectorFormValues,
+): CreateConnectionPayload {
+  const name = values.name.trim()
+  const description = values.description.trim()
+  const descField = description ? { description } : {}
 
-  return {
-    id: createConnectionId(values.name),
-    name: values.name.trim(),
-    type: values.type,
-    status: 'Disconnected',
-    endpoint,
-    ...(trimmedDescription ? { description: trimmedDescription } : {}),
-    details,
+  switch (values.type) {
+    case 'PostgreSQL':
+    case 'MySQL':
+      return {
+        name,
+        ...descField,
+        connectorType: values.type,
+        config: {
+          host: values.host.trim(),
+          port: Number(values.port.trim()),
+          database: values.database.trim(),
+        },
+        credentials: {
+          username: values.username.trim(),
+          ...(values.password.length > 0 ? { password: values.password } : {}),
+        },
+      }
+
+    case 'MongoDB': {
+      const username = values.mongoUsername.trim()
+      const hasPassword = values.mongoPassword.length > 0
+      const hasCredentials = username.length > 0 || hasPassword
+
+      return {
+        name,
+        ...descField,
+        connectorType: 'MongoDB',
+        config: {
+          uri: values.mongoUri.trim(),
+          database: values.mongoDatabase.trim(),
+        },
+        ...(hasCredentials
+          ? {
+              credentials: {
+                ...(username ? { username } : {}),
+                ...(hasPassword ? { password: values.mongoPassword } : {}),
+              },
+            }
+          : {}),
+      }
+    }
+
+    case 'REST API': {
+      const apiKey = values.apiKey.trim()
+      const bearerToken = values.bearerToken.trim()
+
+      return {
+        name,
+        ...descField,
+        connectorType: 'REST API',
+        config: {
+          baseUrl: values.baseUrl.trim(),
+          authType: values.authType,
+        },
+        ...(values.authType === 'api_key' && apiKey
+          ? { credentials: { apiKey } }
+          : values.authType === 'bearer' && bearerToken
+            ? { credentials: { bearerToken } }
+            : {}),
+      }
+    }
+
+    case 'CSV':
+    case 'JSON':
+      return {
+        name,
+        ...descField,
+        connectorType: values.type,
+        config: {
+          fileName: values.fileName.trim(),
+        },
+      }
   }
 }
 
-export function buildUpdatedConnectionFromForm(
+export function buildUpdateConnectionPayload(
   values: ConnectorFormValues,
   existing: Connection,
-): Connection {
-  const { endpoint, details } = buildEndpointAndDetails(values, existing)
-  const trimmedDescription = values.description.trim()
+): UpdateConnectionPayload {
+  const name = values.name.trim()
+  const trimmedDesc = values.description.trim()
+  const config = buildPersistentConfig(values, existing)
 
+  const base: UpdateConnectionPayload = {
+    name,
+    connectorType: existing.type,
+    description: trimmedDesc || null,
+    config,
+    credentialAction: 'keep',
+  }
+
+  switch (existing.type) {
+    case 'PostgreSQL':
+    case 'MySQL': {
+      const username = values.username.trim()
+      if (username.length > 0) {
+        return {
+          ...base,
+          credentialAction: 'replace',
+          credentials: {
+            username,
+            ...(values.password.length > 0 ? { password: values.password } : {}),
+          },
+        }
+      }
+      return base
+    }
+
+    case 'MongoDB': {
+      if (values.clearCredentials) {
+        return {
+          ...base,
+          credentialAction: 'clear',
+        }
+      }
+      const username = values.mongoUsername.trim()
+      const hasPassword = values.mongoPassword.length > 0
+      if (username.length > 0 || hasPassword) {
+        return {
+          ...base,
+          credentialAction: 'replace',
+          credentials: {
+            ...(username ? { username } : {}),
+            ...(hasPassword ? { password: values.mongoPassword } : {}),
+          },
+        }
+      }
+      return base
+    }
+
+    case 'REST API': {
+      if (values.authType === 'none') {
+        const action: CredentialAction = existing.details?.authConfigured
+          ? 'clear'
+          : 'keep'
+        return {
+          ...base,
+          credentialAction: action,
+        }
+      }
+
+      if (values.authType === 'api_key' && values.apiKey.trim()) {
+        return {
+          ...base,
+          credentialAction: 'replace',
+          credentials: { apiKey: values.apiKey.trim() },
+        }
+      }
+
+      if (values.authType === 'bearer' && values.bearerToken.trim()) {
+        return {
+          ...base,
+          credentialAction: 'replace',
+          credentials: { bearerToken: values.bearerToken.trim() },
+        }
+      }
+
+      return base
+    }
+
+    case 'CSV':
+    case 'JSON':
+      return base
+  }
+}
+
+export function stripSensitiveFormValues(
+  values: ConnectorFormValues,
+): ConnectorFormValues {
   return {
-    ...existing,
-    name: values.name.trim(),
-    type: existing.type,
-    status: existing.status,
-    endpoint,
-    description: trimmedDescription || undefined,
-    details: {
-      ...existing.details,
-      ...details,
-    },
+    ...values,
+    username: '',
+    password: '',
+    mongoUsername: '',
+    mongoPassword: '',
+    clearCredentials: false,
+    apiKey: '',
+    bearerToken: '',
   }
 }

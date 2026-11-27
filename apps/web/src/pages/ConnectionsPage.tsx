@@ -1,14 +1,34 @@
-import { useMemo, useState } from 'react'
-import { Cable, CheckCircle2, Plus, Search, X } from 'lucide-react'
-import { AddConnectionModal } from '../components/connections/AddConnectionModal'
-import { ConnectionCard } from '../components/connections/ConnectionCard'
-import { ConnectionDetailsModal } from '../components/connections/ConnectionDetailsModal'
-import { DeleteConnectionDialog } from '../components/connections/DeleteConnectionDialog'
-import { TestConnectionModal } from '../components/connections/TestConnectionModal'
-import { Button } from '../components/ui/Button'
-import { Card, CardContent } from '../components/ui/Card'
-import { MOCK_CONNECTIONS } from '../data/mockConnections'
-import type { Connection, ConnectionStatus } from '../types/connection'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  Cable,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react'
+import { AddConnectionModal } from '../components/connections/AddConnectionModal.tsx'
+import { ConnectionCard } from '../components/connections/ConnectionCard.tsx'
+import { ConnectionDetailsModal } from '../components/connections/ConnectionDetailsModal.tsx'
+import { DeleteConnectionDialog } from '../components/connections/DeleteConnectionDialog.tsx'
+import { TestConnectionModal } from '../components/connections/TestConnectionModal.tsx'
+import { Button } from '../components/ui/Button.tsx'
+import { Card, CardContent } from '../components/ui/Card.tsx'
+import {
+  ConnectionApiClientError,
+  createConnection,
+  deleteConnection,
+  listConnections,
+  updateConnection,
+} from '../services/connectionService.ts'
+import type {
+  Connection,
+  ConnectionStatus,
+  CreateConnectionPayload,
+  UpdateConnectionPayload,
+} from '../types/connection.ts'
 
 type StatusFilter = 'All' | ConnectionStatus
 
@@ -25,11 +45,21 @@ interface FeedbackBanner {
 }
 
 export function ConnectionsPage() {
-  const [connections, setConnections] = useState<Connection[]>(() => [
-    ...MOCK_CONNECTIONS,
-  ])
+  const [connections, setConnections] = useState<Connection[]>([])
+  const [totalFiltered, setTotalFiltered] = useState(0)
+  const [allConnectionsSummary, setAllConnectionsSummary] = useState<
+    Connection[]
+  >([])
+  const [totalConfigured, setTotalConfigured] = useState(0)
+
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All')
+
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [editingConnection, setEditingConnection] =
     useState<Connection | null>(null)
@@ -39,55 +69,159 @@ export function ConnectionsPage() {
     useState<Connection | null>(null)
   const [deletingConnection, setDeletingConnection] =
     useState<Connection | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [feedbackBanner, setFeedbackBanner] = useState<FeedbackBanner | null>(
     null,
   )
 
+  const fetchAbortRef = useRef<AbortController | null>(null)
+  const hasLoadedOnceRef = useRef(false)
+
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => {
+      setDebouncedQuery(searchQuery.trim())
+    }, 180)
+    return () => globalThis.clearTimeout(timer)
+  }, [searchQuery])
+
+  const fetchConnectionsFromApi = useCallback(
+    async (options?: {
+      status?: StatusFilter
+      q?: string
+      syncSummary?: boolean
+    }) => {
+      fetchAbortRef.current?.abort()
+      const controller = new AbortController()
+      fetchAbortRef.current = controller
+
+      const targetStatus = options?.status ?? statusFilter
+      const targetQuery = options?.q ?? debouncedQuery
+      const isFiltered = targetStatus !== 'All' || targetQuery.length > 0
+
+      if (!hasLoadedOnceRef.current) {
+        setIsInitialLoading(true)
+      } else {
+        setIsRefreshing(true)
+      }
+      setLoadError(null)
+
+      try {
+        const filteredPromise = listConnections(
+          {
+            ...(targetStatus !== 'All' ? { status: targetStatus } : {}),
+            ...(targetQuery ? { q: targetQuery } : {}),
+            limit: 200,
+          },
+          { signal: controller.signal },
+        )
+
+        const shouldFetchSummary =
+          options?.syncSummary || (!isFiltered && options?.syncSummary !== false)
+        const summaryPromise = isFiltered && options?.syncSummary
+          ? listConnections({ limit: 200 }, { signal: controller.signal })
+          : null
+
+        const [filteredRes, summaryRes] = await Promise.all([
+          filteredPromise,
+          summaryPromise,
+        ])
+
+        if (controller.signal.aborted) return
+
+        setConnections(filteredRes.items)
+        setTotalFiltered(filteredRes.total)
+
+        if (!isFiltered && shouldFetchSummary) {
+          setAllConnectionsSummary(filteredRes.items)
+          setTotalConfigured(filteredRes.total)
+        } else if (summaryRes) {
+          setAllConnectionsSummary(summaryRes.items)
+          setTotalConfigured(summaryRes.total)
+        }
+
+        const latestItems = summaryRes?.items ?? filteredRes.items
+        setSelectedConnection((prev) =>
+          prev
+            ? (latestItems.find((item) => item.id === prev.id) ?? null)
+            : null,
+        )
+        setTestingConnection((prev) =>
+          prev
+            ? (latestItems.find((item) => item.id === prev.id) ?? null)
+            : null,
+        )
+
+        hasLoadedOnceRef.current = true
+      } catch (error) {
+        if (
+          error instanceof ConnectionApiClientError &&
+          error.isAborted
+        ) {
+          return
+        }
+        if (error instanceof ConnectionApiClientError) {
+          setLoadError(error.message)
+        } else {
+          setLoadError(
+            'Unable to load connections from the backend API. Retry or verify server connectivity.',
+          )
+        }
+      } finally {
+        if (fetchAbortRef.current === controller) {
+          setIsInitialLoading(false)
+          setIsRefreshing(false)
+        }
+      }
+    },
+    [debouncedQuery, statusFilter],
+  )
+
+  useEffect(() => {
+    void fetchConnectionsFromApi({
+      status: statusFilter,
+      q: debouncedQuery,
+      syncSummary: statusFilter === 'All' && debouncedQuery === '',
+    })
+    return () => {
+      fetchAbortRef.current?.abort()
+    }
+  }, [debouncedQuery, fetchConnectionsFromApi, statusFilter])
+
   const statusCounts = useMemo(() => {
     const counts: Record<StatusFilter, number> = {
-      All: connections.length,
+      All: totalConfigured,
       Connected: 0,
       Disconnected: 0,
       Error: 0,
     }
-    for (const conn of connections) {
+    for (const conn of allConnectionsSummary) {
       counts[conn.status] += 1
     }
     return counts
-  }, [connections])
-
-  const filteredConnections = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase()
-
-    return connections.filter((connection) => {
-      if (statusFilter !== 'All' && connection.status !== statusFilter) {
-        return false
-      }
-      if (!query) return true
-
-      return (
-        connection.name.toLowerCase().includes(query) ||
-        connection.type.toLowerCase().includes(query) ||
-        connection.endpoint.toLowerCase().includes(query)
-      )
-    })
-  }, [connections, searchQuery, statusFilter])
+  }, [allConnectionsSummary, totalConfigured])
 
   const hasActiveFilters = searchQuery.trim() !== '' || statusFilter !== 'All'
 
   const clearFilters = () => {
     setSearchQuery('')
+    setDebouncedQuery('')
     setStatusFilter('All')
   }
 
-  const handleCreateConnection = (newConnection: Connection) => {
-    setConnections((prev) => [newConnection, ...prev])
+  const handleCreateConnection = async (payload: CreateConnectionPayload) => {
+    const created = await createConnection(payload)
     setSearchQuery('')
+    setDebouncedQuery('')
     setStatusFilter('All')
+    await fetchConnectionsFromApi({
+      status: 'All',
+      q: '',
+      syncSummary: true,
+    })
     setFeedbackBanner({
-      title: `Connection "${newConnection.name}" added.`,
-      detail:
-        'Saved in local session state with status Disconnected (not tested or persisted to a backend).',
+      title: `Connection "${created.name}" created.`,
+      detail: `Persisted in backend storage with status ${created.status}.`,
     })
   }
 
@@ -105,38 +239,55 @@ export function ConnectionsPage() {
     setTestingConnection(connection)
   }
 
-  const handleUpdateConnection = (updatedConnection: Connection) => {
-    setConnections((prev) =>
-      prev.map((item) =>
-        item.id === updatedConnection.id ? updatedConnection : item,
-      ),
-    )
+  const handleUpdateConnection = async (
+    connectionId: string,
+    payload: UpdateConnectionPayload,
+  ) => {
+    const updated = await updateConnection(connectionId, payload)
     setEditingConnection(null)
+    await fetchConnectionsFromApi({ syncSummary: true })
     setFeedbackBanner({
-      title: `Connection "${updatedConnection.name}" updated.`,
-      detail: `Changes saved in local session state with status ${updatedConnection.status} preserved.`,
+      title: `Connection "${updated.name}" updated.`,
+      detail: `Saved to backend database with status ${updated.status}.`,
     })
   }
 
-  const handleConfirmDelete = (connectionToDelete: Connection) => {
-    setConnections((prev) =>
-      prev.filter((item) => item.id !== connectionToDelete.id),
-    )
-    setDeletingConnection(null)
-    setSelectedConnection((prev) =>
-      prev?.id === connectionToDelete.id ? null : prev,
-    )
-    setEditingConnection((prev) =>
-      prev?.id === connectionToDelete.id ? null : prev,
-    )
-    setTestingConnection((prev) =>
-      prev?.id === connectionToDelete.id ? null : prev,
-    )
-    setFeedbackBanner({
-      title: `Connection "${connectionToDelete.name}" removed.`,
-      detail:
-        'Deleted from current application state (mock dataset and external sources remain unchanged).',
-    })
+  const handleConfirmDelete = async (connectionToDelete: Connection) => {
+    if (isDeleting) return
+    setIsDeleting(true)
+    setDeleteError(null)
+
+    try {
+      await deleteConnection(connectionToDelete.id)
+      setDeletingConnection(null)
+      setSelectedConnection((prev) =>
+        prev?.id === connectionToDelete.id ? null : prev,
+      )
+      setEditingConnection((prev) =>
+        prev?.id === connectionToDelete.id ? null : prev,
+      )
+      setTestingConnection((prev) =>
+        prev?.id === connectionToDelete.id ? null : prev,
+      )
+      await fetchConnectionsFromApi({ syncSummary: true })
+      setFeedbackBanner({
+        title: `Connection "${connectionToDelete.name}" deleted.`,
+        detail:
+          'Removed permanently along with its encrypted backend credentials.',
+      })
+    } catch (error) {
+      if (error instanceof ConnectionApiClientError) {
+        setDeleteError(error.message)
+      } else {
+        setDeleteError('Unable to delete connection. Please try again.')
+      }
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  const handleTestCompleted = () => {
+    void fetchConnectionsFromApi({ syncSummary: true })
   }
 
   return (
@@ -149,19 +300,30 @@ export function ConnectionsPage() {
               Connections
             </h1>
             <span className="rounded border border-zinc-200 bg-zinc-100/80 px-2 py-0.5 text-[11px] font-medium text-zinc-700 tabular-nums">
-              {connections.length} configured
-            </span>
-            <span className="rounded border border-zinc-200/80 bg-white px-1.5 py-0.5 text-[11px] text-zinc-500">
-              Prototype · Mock Data
+              {totalConfigured} configured
             </span>
           </div>
           <p className="mt-1 text-sm text-zinc-500">
-            Manage source and destination connectors across databases, APIs, and
-            storage.
+            Manage persisted source and destination connectors across databases,
+            APIs, and file sources.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={isInitialLoading || isRefreshing}
+            onClick={() => void fetchConnectionsFromApi({ syncSummary: true })}
+            className="h-[34px]"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+              aria-hidden="true"
+            />
+            <span>Refresh</span>
+          </Button>
+
           <Button
             variant="primary"
             size="sm"
@@ -177,7 +339,7 @@ export function ConnectionsPage() {
         </div>
       </div>
 
-      {/* Creation / update feedback banner */}
+      {/* Creation / update / delete feedback banner */}
       {feedbackBanner && (
         <div
           role="status"
@@ -216,7 +378,7 @@ export function ConnectionsPage() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search name, type, or endpoint…"
+              placeholder="Search name, endpoint, or description…"
               aria-label="Search connections"
               className="h-8 w-full rounded-md border border-zinc-200 bg-white pr-7 pl-8 text-xs text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.03)] placeholder:text-zinc-400 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none"
             />
@@ -267,32 +429,69 @@ export function ConnectionsPage() {
 
         <div className="text-xs text-zinc-500 tabular-nums">
           Showing{' '}
-          <span className="font-medium text-zinc-900">
-            {filteredConnections.length}
-          </span>{' '}
+          <span className="font-medium text-zinc-900">{connections.length}</span>{' '}
           of{' '}
-          <span className="font-medium text-zinc-900">
-            {connections.length}
-          </span>{' '}
+          <span className="font-medium text-zinc-900">{totalFiltered}</span>{' '}
           connections
         </div>
       </div>
 
-      {/* Responsive card grid or empty state */}
-      {filteredConnections.length === 0 ? (
+      {/* Loading / API Error / Empty / Card Grid */}
+      {isInitialLoading ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
+            <Loader2
+              className="h-6 w-6 animate-spin text-emerald-600"
+              aria-hidden="true"
+            />
+            <h2 className="mt-3 text-sm font-semibold text-zinc-900">
+              Loading connections…
+            </h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              Fetching persisted connections from the backend API.
+            </p>
+          </CardContent>
+        </Card>
+      ) : loadError ? (
+        <Card>
+          <CardContent className="px-6 py-12 text-center">
+            <div role="alert" className="flex flex-col items-center justify-center">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-600">
+                <AlertCircle className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <h2 className="mt-3 text-sm font-semibold text-zinc-900">
+                Failed to load connections
+              </h2>
+              <p className="mt-1 max-w-md text-xs text-zinc-600">{loadError}</p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void fetchConnectionsFromApi({ syncSummary: true })}
+                className="mt-4"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Retry</span>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : connections.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
             <span className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 bg-zinc-50 text-zinc-500">
               <Cable className="h-5 w-5" aria-hidden="true" />
             </span>
             <h2 className="mt-3 text-sm font-semibold text-zinc-900">
-              No matching connections
+              {hasActiveFilters
+                ? 'No matching connections'
+                : 'No connections configured'}
             </h2>
             <p className="mt-1 max-w-sm text-xs text-zinc-500">
-              No configured connectors match your current search or status
-              filter. Try adjusting your criteria.
+              {hasActiveFilters
+                ? 'No saved connectors match your current search or status filter. Try adjusting your criteria.'
+                : 'Add your first PostgreSQL, MySQL, MongoDB, REST API, CSV, or JSON connector to persist it to the backend.'}
             </p>
-            {hasActiveFilters && (
+            {hasActiveFilters ? (
               <Button
                 variant="secondary"
                 size="sm"
@@ -301,19 +500,35 @@ export function ConnectionsPage() {
               >
                 Clear filters
               </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  setEditingConnection(null)
+                  setIsAddModalOpen(true)
+                }}
+                className="mt-4"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Add Connection</span>
+              </Button>
             )}
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filteredConnections.map((connection) => (
+          {connections.map((connection) => (
             <ConnectionCard
               key={connection.id}
               connection={connection}
               onViewDetails={setSelectedConnection}
               onEdit={handleStartEdit}
               onTestConnection={handleStartTest}
-              onDelete={setDeletingConnection}
+              onDelete={(target) => {
+                setDeleteError(null)
+                setDeletingConnection(target)
+              }}
             />
           ))}
         </div>
@@ -344,12 +559,20 @@ export function ConnectionsPage() {
       <TestConnectionModal
         connection={testingConnection}
         onClose={() => setTestingConnection(null)}
+        onTestCompleted={handleTestCompleted}
       />
 
       <DeleteConnectionDialog
         connection={deletingConnection}
-        onCancel={() => setDeletingConnection(null)}
-        onConfirmDelete={handleConfirmDelete}
+        isDeleting={isDeleting}
+        errorMessage={deleteError}
+        onCancel={() => {
+          if (!isDeleting) {
+            setDeleteError(null)
+            setDeletingConnection(null)
+          }
+        }}
+        onConfirmDelete={(target) => void handleConfirmDelete(target)}
       />
     </div>
   )

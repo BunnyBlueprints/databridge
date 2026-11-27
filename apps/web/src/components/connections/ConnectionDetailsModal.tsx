@@ -92,14 +92,12 @@ function ConfigurationSection({ connection }: { connection: Connection }) {
       const host = d?.host ?? parsed.host ?? 'Unavailable'
       const port = d?.port !== undefined ? String(d.port) : (parsed.port ?? 'Unavailable')
       const database = d?.database ?? parsed.database ?? 'Unavailable'
-      const username = d?.username ?? 'Not recorded'
 
       return (
         <>
           <DetailRow label="Host" value={host} mono />
           <DetailRow label="Port" value={port} mono />
           <DetailRow label="Database Name" value={database} mono />
-          <DetailRow label="Username" value={username} mono={Boolean(d?.username)} />
         </>
       )
     }
@@ -110,13 +108,11 @@ function ConfigurationSection({ connection }: { connection: Connection }) {
         d?.sanitizedUri ?? parsed.sanitizedUri,
       )
       const database = d?.database ?? parsed.database ?? 'Unavailable'
-      const username = d?.username ?? 'Not specified'
 
       return (
         <>
           <DetailRow label="Sanitized Endpoint" value={sanitizedUri} mono />
           <DetailRow label="Database Name" value={database} mono />
-          <DetailRow label="Username" value={username} mono={Boolean(d?.username)} />
         </>
       )
     }
@@ -165,7 +161,7 @@ function getSecuritySummary(connection: Connection): {
     return {
       statusLabel: `Configured${methodSuffix}`,
       detailNote:
-        'Credential secrets are masked on entry and never stored in or reconstructed by the UI.',
+        'Credentials are encrypted at rest on the backend and never exposed to or prefilled in the UI.',
     }
   }
 
@@ -173,17 +169,17 @@ function getSecuritySummary(connection: Connection): {
     return {
       statusLabel:
         connection.type === 'CSV' || connection.type === 'JSON'
-          ? 'Not applicable (local file)'
+          ? 'Not applicable (file source)'
           : 'None configured',
       detailNote:
-        'No authentication secret is attached to this connector configuration.',
+        'No authentication secret is attached to this saved connector.',
     }
   }
 
   return {
-    statusLabel: 'Unavailable in mock metadata',
+    statusLabel: 'Unavailable',
     detailNote:
-      'Credential status is omitted because this prototype record does not carry backend vault metadata.',
+      'Credential status metadata was not returned for this record.',
   }
 }
 
@@ -294,7 +290,7 @@ function ConnectionDetailsDialog({
 
         {/* Scrollable body */}
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
-          {connection.status === 'Error' && connection.errorMessage && (
+          {connection.errorMessage && (
             <div className="flex items-start gap-2 rounded-md border border-rose-200/80 bg-rose-50/70 px-3 py-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
               <AlertCircle
                 className="mt-0.5 h-4 w-4 shrink-0"
@@ -320,6 +316,19 @@ function ConnectionDetailsDialog({
               <DetailRow label="Connector Type" value={connection.type} />
               <DetailRow label="Connection ID" value={connection.id} mono />
               <DetailRow label="Status" value={connection.status} />
+              {connection.lastTestStatus && (
+                <DetailRow
+                  label="Last Test Outcome"
+                  value={connection.lastTestStatus}
+                />
+              )}
+              {connection.lastTestedAt && (
+                <DetailRow
+                  label="Last Tested At"
+                  value={new Date(connection.lastTestedAt).toLocaleString()}
+                  mono
+                />
+              )}
               {connection.description && (
                 <DetailRow
                   label="Description"

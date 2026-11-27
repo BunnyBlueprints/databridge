@@ -15,13 +15,76 @@ cp .env.example .env
 uv sync --dev
 ```
 
-## Installed Connector Dependencies
+## Installed Dependencies
 
-- **PostgreSQL**: `psycopg[binary]` (psycopg 3 async driver with `connect_timeout` and `statement_timeout`)
-- **MySQL**: `pymysql` (pure-Python driver executed via `asyncio.to_thread` with `connect_timeout`, `read_timeout`, and `write_timeout`)
-- **MongoDB**: `pymongo` + `dnspython` (`AsyncMongoClient` supporting both `mongodb://` and `mongodb+srv://` URIs)
-- **REST API**: `httpx` (`AsyncClient` with custom `SsrfSafeHttpTransport` / `httpcore` network backend pinning)
-- **CSV / JSON**: Python standard library `csv` and `json` modules
+- **Web / Validation**: `fastapi`, `pydantic`, `pydantic-settings`, `uvicorn[standard]`
+- **PostgreSQL Persistence Foundation**: `psycopg[binary]` + `psycopg-pool` (async connection pool & forward-only SQL migrations)
+- **Connector Drivers**:
+  - **PostgreSQL**: `psycopg[binary]` (psycopg 3 async driver with `connect_timeout` and `statement_timeout`)
+  - **MySQL**: `pymysql` (pure-Python driver executed via `asyncio.to_thread` with `connect_timeout`, `read_timeout`, and `write_timeout`)
+  - **MongoDB**: `pymongo` + `dnspython` (`AsyncMongoClient` supporting both `mongodb://` and `mongodb+srv://` URIs)
+  - **REST API**: `httpx` (`AsyncClient` with custom `SsrfSafeHttpTransport` / `httpcore` network backend pinning)
+  - **CSV / JSON**: Python standard library `csv` and `json` modules
+
+## Database Persistence & Migrations
+
+DataBridge supports two modes:
+
+- **Stateless mode (default when `DATABASE_URL` is unset)**: Existing Task 03 connection testing (`POST /api/v1/connections/test`) works without a PostgreSQL database; `GET /health/db` returns `200` with `{"status": "disabled", "persistenceEnabled": false}`.
+- **Persistent mode (when `DATABASE_URL` is configured)**: Initializes an async `psycopg_pool.AsyncConnectionPool` via FastAPI lifespan, validates DB connectivity on startup, exposes readiness via `GET /health/db`, and enables persistent connection CRUD (`POST/GET/PUT/DELETE /api/v1/connections`) and saved testing (`POST /api/v1/connections/{connection_id}/test`).
+
+> **Deployment Security Boundary:** DataBridge does not yet implement user authentication or workspace RBAC. Never expose `/api/v1/connections*` publicly without an authenticated access-control boundary—UUIDs identify connections and do not provide authorization.
+
+### Database Environment Variables
+
+- `DATABASE_URL`: PostgreSQL connection string (`postgresql://user:password@host:5432/dbname`). Leave unset for stateless mode.
+- `DATABASE_POOL_MIN_SIZE`: Minimum pool size (default `1`).
+- `DATABASE_POOL_MAX_SIZE`: Maximum pool size (default `10`).
+- `DATABASE_POOL_TIMEOUT_SECONDS`: Connection acquisition timeout in seconds (default `5.0`).
+- `DATABASE_CONNECT_TIMEOUT_SECONDS`: TCP/libpq connect timeout in seconds (default `5`).
+- `DATABASE_HEALTH_CHECK_ENABLED`: Enable pool connection check callback (`true` by default).
+
+### Running Migrations
+
+Migrations are forward-only `.sql` files in `apps/api/migrations/` tracked in `schema_migrations`, and are **never** run automatically on app startup:
+
+```bash
+cd apps/api
+# Inspect current schema version and pending migrations
+uv run python -m app.db.cli status
+
+# Apply pending migrations
+uv run python -m app.db.cli migrate
+```
+
+## Credential Encryption (AES-256-GCM)
+
+When `DATABASE_URL` is configured, DataBridge requires backend credential encryption configuration at startup (`CREDENTIAL_ENCRYPTION_KEYS` and `CREDENTIAL_ACTIVE_KEY_ID`). Stateless connection testing (`DATABASE_URL` unset) works without encryption keys.
+
+### Key Encoding & Initial Generation
+
+Each key in `CREDENTIAL_ENCRYPTION_KEYS` must be a Base64-encoded 32-byte (256-bit) random key stored as a JSON object mapping key IDs to keys:
+
+```bash
+python3 -c 'import base64, json, os; print(json.dumps({"k1": base64.b64encode(os.urandom(32)).decode()}))'
+```
+
+Configure in `.env` (or inject via a secret manager):
+
+```env
+CREDENTIAL_ENCRYPTION_KEYS={"k1":"<generated-32-byte-base64-key>"}
+CREDENTIAL_ACTIVE_KEY_ID=k1
+```
+
+### Encryption Format & Key Rotation
+
+- `CredentialEncryptionService` encrypts validated connector credentials with **AES-256-GCM**, a fresh 12-byte CSPRNG nonce (`os.urandom(12)`) per operation, and Associated Authenticated Data (AAD) `{connection_id}:{connector_type}:{key_version}`.
+- New encryptions always use `CREDENTIAL_ACTIVE_KEY_ID`; decryption selects the key matching the stored record's `key_id`.
+- **Rotation procedure:**
+  1. Generate a new 32-byte Base64 key (e.g., `k2`) and add it to `CREDENTIAL_ENCRYPTION_KEYS` while keeping `k1` present.
+  2. Switch `CREDENTIAL_ACTIVE_KEY_ID=k2` and deploy; new or updated credentials encrypt under `k2`, while existing records continue decrypting with `k1`.
+  3. Changing `CREDENTIAL_ACTIVE_KEY_ID` does **not** automatically re-encrypt existing stored records; keep retired keys in `CREDENTIAL_ENCRYPTION_KEYS` until all rows referencing them have been updated or rotated.
+- **Backup & key loss:** Database backups do not contain encryption keys. Back up `CREDENTIAL_ENCRYPTION_KEYS` in a secure secret manager independently of DB snapshots—losing a key renders credentials encrypted under that key permanently unrecoverable.
 
 ## Running the Server
 

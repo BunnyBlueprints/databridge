@@ -1,17 +1,22 @@
-import { buildApiUrl } from '../config/env'
+import { buildApiUrl } from '../config/env.ts'
+import type { SavedConnectionTestPayload } from '../types/connection.ts'
 import type {
   ConnectionTestErrorCode,
   ConnectionTestRequest,
   ConnectionTestResult,
   ConnectionTestTerminalStatus,
   KnownConnectionTestErrorCode,
-} from '../types/connectionTest'
+} from '../types/connectionTest.ts'
+import {
+  isAbortError,
+  isPlainRecord,
+  normalizeApiErrorCode,
+  resolveTimeoutMs,
+  sanitizeApiMessage,
+} from './apiClientUtils.ts'
 
 export const CONNECTION_TEST_ENDPOINT = '/api/v1/connections/test'
 export const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15_000
-
-const MAX_MESSAGE_LENGTH = 300
-const MAX_ERROR_CODE_LENGTH = 64
 
 const SAFE_ERROR_MESSAGES: Record<KnownConnectionTestErrorCode, string> = {
   CONNECTION_REFUSED:
@@ -40,21 +45,6 @@ export interface TestConnectionOptions {
   signal?: AbortSignal
   /** Optional fetch implementation override (for testing/injection). */
   fetcher?: typeof fetch
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function resolveTimeoutMs(timeoutMs: number | undefined): number {
-  if (
-    typeof timeoutMs === 'number' &&
-    Number.isFinite(timeoutMs) &&
-    timeoutMs > 0
-  ) {
-    return timeoutMs
-  }
-  return DEFAULT_CONNECTION_TEST_TIMEOUT_MS
 }
 
 function measureDurationMs(startedAt: number): number {
@@ -90,22 +80,6 @@ function mapHttpStatusToErrorCode(status: number): KnownConnectionTestErrorCode 
   return 'SERVER_ERROR'
 }
 
-function normalizeErrorCode(
-  rawCode: unknown,
-  fallback: KnownConnectionTestErrorCode,
-): ConnectionTestErrorCode {
-  if (typeof rawCode !== 'string') return fallback
-  const trimmed = rawCode.trim()
-  if (
-    trimmed.length === 0 ||
-    trimmed.length > MAX_ERROR_CODE_LENGTH ||
-    !/^[A-Za-z0-9_.:-]+$/.test(trimmed)
-  ) {
-    return fallback
-  }
-  return trimmed
-}
-
 function collectSensitiveValues(request: ConnectionTestRequest): string[] {
   const candidates: Array<string | undefined> = []
 
@@ -135,58 +109,6 @@ function collectSensitiveValues(request: ConnectionTestRequest): string[] {
     (value): value is string =>
       typeof value === 'string' && value.trim().length >= 3,
   )
-}
-
-function containsStackTraceOrHtml(message: string): boolean {
-  const lower = message.toLowerCase()
-  return (
-    lower.includes('<!doctype') ||
-    lower.includes('<html') ||
-    lower.includes('traceback (most recent call last)') ||
-    /\n\s+at\s+/.test(message) ||
-    /\s+at\s+\S+\s+\([^)]+:\d+:\d+\)/.test(message)
-  )
-}
-
-function sanitizeMessage(
-  rawMessage: unknown,
-  fallback: string,
-  sensitiveValues: readonly string[],
-): string {
-  if (typeof rawMessage !== 'string') return fallback
-  const normalizedWhitespace = rawMessage.replace(/\r\n/g, '\n').trim()
-  if (!normalizedWhitespace || containsStackTraceOrHtml(normalizedWhitespace)) {
-    return fallback
-  }
-
-  let sanitized = normalizedWhitespace.split('\n')[0]?.trim() ?? ''
-  if (!sanitized) return fallback
-
-  for (const secret of sensitiveValues) {
-    if (sanitized.includes(secret)) {
-      sanitized = sanitized.split(secret).join('[REDACTED]')
-    }
-  }
-
-  // Strip embedded URI credentials, bearer tokens, key=value secrets, and private IPs.
-  sanitized = sanitized
-    .replace(/:\/\/[^/@\s]+@/g, '://[REDACTED]@')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
-    .replace(
-      /\b(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S+/gi,
-      '$1=[REDACTED]',
-    )
-    .replace(
-      /\b(?:10(?:\.\d{1,3}){3}|127(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/g,
-      '[internal-host]',
-    )
-    .replace(/\[::1\]/g, '[internal-host]')
-
-  if (sanitized.length > MAX_MESSAGE_LENGTH) {
-    return `${sanitized.slice(0, MAX_MESSAGE_LENGTH - 1)}…`
-  }
-
-  return sanitized
 }
 
 function getFallbackFailureMessage(code: ConnectionTestErrorCode): string {
@@ -228,7 +150,7 @@ function normalizeFailurePayload(
   fallbackDurationMs: number,
   sensitiveValues: readonly string[],
 ): ConnectionTestResult {
-  const errorCode = normalizeErrorCode(
+  const errorCode = normalizeApiErrorCode(
     raw?.errorCode ?? raw?.code,
     fallbackErrorCode,
   )
@@ -236,7 +158,7 @@ function normalizeFailurePayload(
     raw?.status === 'timeout' || errorCode === 'TIMEOUT' ? 'timeout' : 'failed'
 
   const fallbackMessage = getFallbackFailureMessage(errorCode)
-  const message = sanitizeMessage(
+  const message = sanitizeApiMessage(
     raw?.message ?? raw?.error,
     fallbackMessage,
     sensitiveValues,
@@ -285,7 +207,7 @@ function normalizeBackendResponse(
     return {
       success: true,
       status: 'connected',
-      message: sanitizeMessage(
+      message: sanitizeApiMessage(
         raw.message,
         'Connection established successfully.',
         sensitiveValues,
@@ -309,7 +231,6 @@ function normalizeBackendResponse(
     )
   }
 
-  // Unexpected or contradictory payload shape on 2xx: never treat as a fake success.
   return {
     success: false,
     status: 'failed',
@@ -321,30 +242,13 @@ function normalizeBackendResponse(
   }
 }
 
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === 'AbortError') ||
-    (error instanceof Error && error.name === 'AbortError')
-  )
-}
-
-/**
- * Executes a backend-authoritative connection test via POST /api/v1/connections/test.
- *
- * Security & Credential Limitation:
- * - Existing saved connections do not store passwords, API keys, bearer tokens, or
- *   MongoDB URI credentials in the frontend.
- * - Transient credentials may be supplied in `request.credentials` and are transmitted
- *   strictly in the HTTPS/HTTP request body; they are never persisted, fabricated, or logged.
- * - All responses and errors are normalized and sanitized so secrets, internal hosts,
- *   and backend stack traces are never exposed to the caller.
- */
-export async function testConnection(
-  request: ConnectionTestRequest,
+async function executeConnectionTestFetch(
+  endpointPath: string,
+  serializedBody: string,
+  sensitiveValues: readonly string[],
   options: TestConnectionOptions = {},
 ): Promise<ConnectionTestResult> {
   const startedAt = Date.now()
-  const sensitiveValues = collectSensitiveValues(request)
   const fetcher = options.fetcher ?? globalThis.fetch
 
   if (typeof fetcher !== 'function') {
@@ -369,7 +273,10 @@ export async function testConnection(
     }
   }
 
-  const timeoutMs = resolveTimeoutMs(options.timeoutMs)
+  const timeoutMs = resolveTimeoutMs(
+    options.timeoutMs,
+    DEFAULT_CONNECTION_TEST_TIMEOUT_MS,
+  )
   const controller = new AbortController()
   let timedOut = false
 
@@ -385,13 +292,13 @@ export async function testConnection(
   options.signal?.addEventListener('abort', handleExternalAbort, { once: true })
 
   try {
-    const response = await fetcher(buildApiUrl(CONNECTION_TEST_ENDPOINT), {
+    const response = await fetcher(buildApiUrl(endpointPath), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
-      body: buildSerializedRequestBody(request),
+      body: serializedBody,
       signal: controller.signal,
     })
 
@@ -466,4 +373,43 @@ export async function testConnection(
     globalThis.clearTimeout(timeoutId)
     options.signal?.removeEventListener('abort', handleExternalAbort)
   }
+}
+
+/**
+ * Executes a stateless connection test via POST /api/v1/connections/test.
+ */
+export async function testConnection(
+  request: ConnectionTestRequest,
+  options: TestConnectionOptions = {},
+): Promise<ConnectionTestResult> {
+  return executeConnectionTestFetch(
+    CONNECTION_TEST_ENDPOINT,
+    buildSerializedRequestBody(request),
+    collectSensitiveValues(request),
+    options,
+  )
+}
+
+/**
+ * Executes a saved connection test via POST /api/v1/connections/{connection_id}/test.
+ * Sends no credential fields; backend decrypts stored credentials in memory.
+ */
+export async function testSavedConnection(
+  connectionId: string,
+  payload?: SavedConnectionTestPayload,
+  options: TestConnectionOptions = {},
+): Promise<ConnectionTestResult> {
+  const cleanId = connectionId.trim()
+  const path = `/api/v1/connections/${encodeURIComponent(cleanId)}/test`
+  const bodyObj: Record<string, unknown> = {}
+  if (typeof payload?.fileContent === 'string') {
+    bodyObj.fileContent = payload.fileContent
+  }
+
+  return executeConnectionTestFetch(
+    path,
+    JSON.stringify(bodyObj),
+    [],
+    options,
+  )
 }

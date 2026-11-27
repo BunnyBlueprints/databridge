@@ -1,32 +1,21 @@
+Stage 1 — Engineering foundations
+Git, Node, TypeScript, project structure, environment variables, configuration and debugging.Starting now
 
-# DataBridge
+Stage 2 — Product & frontend
+React architecture, component design, routing, forms, API state, loading/error states, dashboard and connector screens.
 
-Universal Data Integration & Synchronization Platform.
+Stage 3 — Backend & API
+HTTP, REST, Express middleware, request validation, authentication, error handling and API design.
 
-## Overview
+Stage 4 — Data engineering
+SQL, relational modeling, constraints, transactions, migrations, indexing and schema mapping.
 
-DataBridge is a platform designed to connect different systems,
-map their data schemas, and synchronize records reliably.
 
-## Planned Capabilities
+Stage 5 — Sync engine
+Connectors, pipelines, transformations, workers, Redis, BullMQ, retries, idempotency and dead-letter queues.
 
-- Integration management
-- Source and destination connectors
-- Schema mapping
-- Data transformation
-- Sync job execution
-- Retry and failure recovery
-- Sync history and observability
+Stage 6 — Reliability & testing
+Unit tests, integration tests, end-to-end tests, concurrency, rate limiting, failure simulations and observability.
 
-## Engineering Goals
-
-- Reliable data delivery
-- Idempotent processing
-- Asynchronous job execution
-- Modular connector architecture
-- Type-safe APIs
-- Testable system design
-
-## Status
-
-Currently in development.
+Stage 7 — Production engineering
+Docker, CI/CD, security, deployment, performance, architecture documentation and production readiness.
