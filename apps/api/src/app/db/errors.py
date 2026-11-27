@@ -18,7 +18,15 @@ class DatabaseTimeoutError(DatabaseError):
 
 
 class DatabaseConflictError(DatabaseError):
-    """Raised when a uniqueness or integrity constraint is violated."""
+    """Raised when a uniqueness or referential integrity constraint is violated."""
+
+    def __init__(self, message: str = "", *, error_code: str | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class DatabaseConstraintError(DatabaseError):
+    """Raised when a database CHECK or NOT NULL constraint is violated."""
 
 
 class MigrationError(DatabaseError):

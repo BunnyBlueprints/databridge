@@ -211,14 +211,17 @@ export function ConnectionsPage() {
 
   const handleCreateConnection = async (payload: CreateConnectionPayload) => {
     const created = await createConnection(payload)
+    const wasFiltered = statusFilter !== 'All' || debouncedQuery !== ''
     setSearchQuery('')
     setDebouncedQuery('')
     setStatusFilter('All')
-    await fetchConnectionsFromApi({
-      status: 'All',
-      q: '',
-      syncSummary: true,
-    })
+    if (!wasFiltered) {
+      await fetchConnectionsFromApi({
+        status: 'All',
+        q: '',
+        syncSummary: true,
+      })
+    }
     setFeedbackBanner({
       title: `Connection "${created.name}" created.`,
       detail: `Persisted in backend storage with status ${created.status}.`,

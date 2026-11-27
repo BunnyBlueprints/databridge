@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.logging import redact_sensitive_text
 from app.db.errors import (
     DatabaseConflictError,
+    DatabaseConstraintError,
     DatabaseError,
     DatabaseNotConfiguredError,
     DatabaseTimeoutError,
@@ -98,6 +99,8 @@ def build_failure_result(
 
 def _format_validation_error_summary(
     exc: RequestValidationError,
+    *,
+    is_mapping_route: bool = False,
 ) -> tuple[ConnectionTestErrorCode, str, int]:
     """Derive a safe error code, message, and HTTP status without exposing input values."""
     errors = exc.errors()
@@ -109,19 +112,21 @@ def _format_validation_error_summary(
                 status.HTTP_400_BAD_REQUEST,
             )
 
-    for err in errors:
-        loc = err.get("loc", ())
-        err_type = str(err.get("type", ""))
-        if err_type == "union_tag_invalid" or loc == ("body", "connectorType"):
-            allowed = ", ".join(SUPPORTED_CONNECTOR_TYPES)
-            return (
-                "UNSUPPORTED_CONNECTOR",
-                f"Unsupported connector type. Supported types: {allowed}.",
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-            )
+    if not is_mapping_route:
+        for err in errors:
+            loc = err.get("loc", ())
+            err_type = str(err.get("type", ""))
+            if err_type == "union_tag_invalid" or loc == ("body", "connectorType"):
+                allowed = ", ".join(SUPPORTED_CONNECTOR_TYPES)
+                return (
+                    "UNSUPPORTED_CONNECTOR",
+                    f"Unsupported connector type. Supported types: {allowed}.",
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                )
 
     # Extract only safe field locations and sanitized messages; never include `input`.
     safe_details: list[str] = []
+    mapped_error_code: ConnectionTestErrorCode | str = "INVALID_CONFIGURATION"
     for err in errors[:3]:
         loc_parts = [str(part) for part in err.get("loc", ()) if part != "body"]
         # Filter out discriminated-union branch tags in loc when possible for readability.
@@ -130,18 +135,32 @@ def _format_validation_error_summary(
         # Strip Pydantic's "Value error, " prefix if present.
         if msg.startswith("Value error, "):
             msg = msg[len("Value error, ") :]
+
+        if is_mapping_route:
+            lowered_msg = msg.lower()
+            if "duplicate mapping rule for destination field" in lowered_msg:
+                mapped_error_code = "DUPLICATE_DESTINATION_FIELD"
+            elif mapped_error_code != "DUPLICATE_DESTINATION_FIELD" and (
+                "rules" in loc_parts
+                or "mapping rule" in lowered_msg
+                or "transform" in lowered_msg
+                or "constant" in lowered_msg
+                or "ordinalposition" in lowered_msg
+            ):
+                mapped_error_code = "INVALID_MAPPING_RULE"
+            elif mapped_error_code == "INVALID_CONFIGURATION":
+                mapped_error_code = "INVALID_MAPPING_REFERENCE"
+
         if field_path:
             safe_details.append(f"{field_path}: {msg}")
         else:
             safe_details.append(msg)
 
-    summary = "; ".join(safe_details) if safe_details else "Invalid connection test configuration."
+    prefix = "Invalid mapping request" if is_mapping_route else "Invalid connection configuration"
+    summary = "; ".join(safe_details) if safe_details else f"{prefix}."
     return (
-        "INVALID_CONFIGURATION",
-        sanitize_error_message(
-            f"Invalid connection configuration: {summary}",
-            "Invalid connection configuration.",
-        ),
+        mapped_error_code,
+        sanitize_error_message(f"{prefix}: {summary}", f"{prefix}."),
         status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
@@ -202,13 +221,19 @@ async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Return normalized errors without leaking raw input or secrets."""
-    error_code, message, http_status = _format_validation_error_summary(exc)
+    is_mapping_route = request.url.path.startswith("/api/v1/mappings")
+    error_code, message, http_status = _format_validation_error_summary(
+        exc,
+        is_mapping_route=is_mapping_route,
+    )
     return _build_api_error_response(
         request,
         http_status=http_status,
         error_code=error_code,
         message=message,
-        fallback="Invalid connection configuration.",
+        fallback="Invalid mapping request."
+        if is_mapping_route
+        else "Invalid connection configuration.",
     )
 
 
@@ -253,7 +278,13 @@ async def database_exception_handler(request: Request, exc: DatabaseError) -> JS
         status_value = "timeout"
     elif isinstance(exc, DatabaseConflictError):
         http_status = status.HTTP_409_CONFLICT
-        error_code = "INVALID_CONFIGURATION" if is_test_route else "DUPLICATE_CONNECTION"
+        error_code = (
+            "INVALID_CONFIGURATION" if is_test_route else (exc.error_code or "DUPLICATE_CONNECTION")
+        )
+        status_value = "failed"
+    elif isinstance(exc, DatabaseConstraintError):
+        http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
+        error_code = "INVALID_CONFIGURATION"
         status_value = "failed"
     elif isinstance(exc, (DatabaseNotConfiguredError, DatabaseUnavailableError)):
         http_status = status.HTTP_503_SERVICE_UNAVAILABLE

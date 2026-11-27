@@ -12,6 +12,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.routes.connections import router as connections_router
 from app.api.routes.health import router as health_router
+from app.api.routes.mappings import router as mappings_router
+from app.api.routes.schemas import router as schemas_router
 from app.core.config import Settings, get_settings
 from app.core.errors import (
     build_failure_result,
@@ -28,6 +30,8 @@ from app.db.errors import DatabaseError
 from app.db.pool import DatabaseManager
 from app.repositories.connections import ConnectionRepository
 from app.repositories.credentials import CredentialRepository
+from app.repositories.mappings import MappingRepository
+from app.repositories.schemas import SchemaRepository
 from app.schemas.connections import ApiErrorResponse, ConnectionApiError
 from app.services.connection_service import ConnectionService
 from app.services.connection_test_service import ConnectionTestService
@@ -35,6 +39,12 @@ from app.services.credential_encryption import (
     CredentialEncryptionError,
     CredentialEncryptionService,
 )
+from app.services.discovery.registry import (
+    ConnectorDiscovererRegistry,
+    create_default_discoverer_registry,
+)
+from app.services.discovery.service import SchemaDiscoveryService
+from app.services.mappings import MappingService
 from app.services.testers.registry import (
     ConnectorTesterRegistry,
     create_default_tester_registry,
@@ -142,6 +152,7 @@ def create_app(
     registry: ConnectorTesterRegistry | None = None,
     database_manager: DatabaseManager | None = None,
     credential_encryption_service: CredentialEncryptionService | None = None,
+    discoverer_registry: ConnectorDiscovererRegistry | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application instance."""
     resolved_settings = settings or get_settings()
@@ -188,21 +199,49 @@ def create_app(
     )
     connection_repo = ConnectionRepository(resolved_db_manager)
     credential_repo = CredentialRepository(resolved_db_manager)
+    schema_repo = SchemaRepository(resolved_db_manager)
+    mapping_repo = MappingRepository(resolved_db_manager)
     connection_service = ConnectionService(
         connection_repo=connection_repo,
         credential_repo=credential_repo,
         encryption_service=resolved_encryption_service,
         connection_test_service=connection_test_service,
     )
+    resolved_discoverer_registry = discoverer_registry or create_default_discoverer_registry(
+        max_file_bytes=resolved_settings.connection_test_max_file_bytes,
+        max_rest_response_bytes=resolved_settings.rest_api_max_response_bytes,
+    )
+    schema_discovery_service = SchemaDiscoveryService(
+        connection_repo=connection_repo,
+        credential_repo=credential_repo,
+        schema_repo=schema_repo,
+        encryption_service=resolved_encryption_service,
+        discoverer_registry=resolved_discoverer_registry,
+        timeout_seconds=resolved_settings.schema_discovery_timeout_seconds,
+        max_objects=resolved_settings.schema_discovery_max_objects,
+        max_fields_per_object=resolved_settings.schema_discovery_max_fields_per_object,
+        default_sample_limit=resolved_settings.schema_discovery_default_sample_limit,
+        max_sample_limit=resolved_settings.schema_discovery_max_sample_limit,
+    )
+    mapping_service = MappingService(
+        connection_repo=connection_repo,
+        schema_repo=schema_repo,
+        mapping_repo=mapping_repo,
+    )
 
     application.state.settings = resolved_settings
     application.state.database_manager = resolved_db_manager
     application.state.credential_encryption_service = resolved_encryption_service
     application.state.tester_registry = resolved_registry
+    application.state.discoverer_registry = resolved_discoverer_registry
     application.state.connection_test_service = connection_test_service
     application.state.connection_repository = connection_repo
     application.state.credential_repository = credential_repo
+    application.state.schema_repository = schema_repo
+    application.state.mapping_repository = mapping_repo
     application.state.connection_service = connection_service
+    application.state.schema_discovery_service = schema_discovery_service
+    application.state.mapping_service = mapping_service
 
     application.add_middleware(
         RequestSizeLimitMiddleware,
@@ -225,6 +264,8 @@ def create_app(
 
     application.include_router(health_router)
     application.include_router(connections_router)
+    application.include_router(schemas_router)
+    application.include_router(mappings_router)
 
     return application
 

@@ -1,17 +1,17 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import {
   Activity,
-  Compass,
   GitBranch,
   PlaySquare,
   PlusSquare,
   Settings,
-  Workflow,
 } from 'lucide-react'
 import { AppShell } from './components/layout/AppShell'
 import { WorkspaceProvider } from './components/layout/WorkspaceContext'
 import { ConnectionsPage } from './pages/ConnectionsPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { DataExplorerPage } from './pages/DataExplorerPage'
+import { MappingStudioPage } from './pages/MappingStudioPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { SyncJobDetailPage } from './pages/SyncJobDetailPage'
 
@@ -59,37 +59,9 @@ function App() {
 
             <Route path="/sync-jobs/:jobId" element={<SyncJobDetailPage />} />
 
-            <Route
-              path="/data-explorer"
-              element={
-                <PlaceholderPage
-                  title="Data Explorer"
-                  description="Inspect sample payloads, source schemas, and synchronized destination tables."
-                  icon={Compass}
-                  plannedCapabilities={[
-                    'Schema introspection across registered connectors',
-                    'Read-only record sampling and type verification',
-                    'Row-level sync lineage inspection',
-                  ]}
-                />
-              }
-            />
+            <Route path="/data-explorer" element={<DataExplorerPage />} />
 
-            <Route
-              path="/mapping-studio"
-              element={
-                <PlaceholderPage
-                  title="Mapping Studio"
-                  description="Map source fields to destination schemas with type coercion and validation."
-                  icon={Workflow}
-                  plannedCapabilities={[
-                    'Visual field-to-field schema mapping editor',
-                    'Nullability, default value, and schema drift rules',
-                    'Dry-run mapping preview against sample records',
-                  ]}
-                />
-              }
-            />
+            <Route path="/mapping-studio" element={<MappingStudioPage />} />
 
             <Route
               path="/transformations"

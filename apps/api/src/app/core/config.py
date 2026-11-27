@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     connection_test_timeout_seconds: float = Field(default=10.0, gt=0.0, le=120.0)
     connection_test_max_file_bytes: int = Field(default=262_144, ge=64, le=2_097_152)
     rest_api_max_response_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
+    schema_discovery_timeout_seconds: float = Field(default=15.0, gt=0.0, le=60.0)
+    schema_discovery_max_objects: int = Field(default=250, ge=1, le=2000)
+    schema_discovery_max_fields_per_object: int = Field(default=500, ge=1, le=2000)
+    schema_discovery_default_sample_limit: int = Field(default=100, ge=1, le=500)
+    schema_discovery_max_sample_limit: int = Field(default=500, ge=1, le=1000)
     enable_api_docs: bool = True
 
     # PostgreSQL persistence configuration (optional; absent = stateless mode)
@@ -186,6 +191,12 @@ class Settings(BaseSettings):
         if self.database_pool_min_size > self.database_pool_max_size:
             raise ValueError(
                 "DATABASE_POOL_MIN_SIZE must be less than or equal to DATABASE_POOL_MAX_SIZE."
+            )
+
+        if self.schema_discovery_default_sample_limit > self.schema_discovery_max_sample_limit:
+            raise ValueError(
+                "SCHEMA_DISCOVERY_DEFAULT_SAMPLE_LIMIT must be <= "
+                "SCHEMA_DISCOVERY_MAX_SAMPLE_LIMIT."
             )
 
         if (self.credential_encryption_keys is None) != (self.credential_active_key_id is None):

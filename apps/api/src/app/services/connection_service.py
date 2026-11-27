@@ -680,6 +680,33 @@ class ConnectionService:
                     conn=conn,
                 )
                 return True, True
+
+            if "username" in existing.config:
+                stored_cred = await self._credential_repo.get_by_connection_id(
+                    existing.id, conn=conn
+                )
+                has_encrypted_username = False
+                if stored_cred is not None:
+                    decrypted_legacy = self._require_encryption_service().decrypt(
+                        encrypted=stored_cred.encrypted,
+                        connection_id=existing.id,
+                        connector_type=existing.connector_type,
+                    )
+                    has_encrypted_username = (
+                        isinstance(decrypted_legacy, SqlStoredCredentials)
+                        and decrypted_legacy.username is not None
+                    )
+                if not has_encrypted_username:
+                    raise ConnectionApiError(
+                        error_code="INVALID_CONFIGURATION",
+                        message=(
+                            f"Legacy {connector_type} connection stores an unencrypted username "
+                            "in configuration; update using credentialAction='replace' with "
+                            "username to migrate credentials safely."
+                        ),
+                        http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    )
+
             return existing.auth_configured, False
 
         # MongoDB (optional authentication; allows keep, replace, or clear)

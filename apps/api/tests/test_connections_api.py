@@ -1087,6 +1087,26 @@ def test_legacy_precorrection_credential_row_remains_readable_without_leaking_us
         assert test_res.json()["success"] is True
         assert registry.dispatched_requests[-1].config.username == "ro_user"  # type: ignore[union-attr]
 
+        # Legacy SQL row without encrypted username refuses silent keep overwrite
+        keep_err = client.put(
+            f"/api/v1/connections/{legacy_id}",
+            json={"name": "legacy-pg-renamed", "credentialAction": "keep"},
+        )
+        assert keep_err.status_code == 422
+        assert db_conn.connections[legacy_id]["config"]["username"] == "ro_user"
+
+        # Explicit replace migrates credentials and cleans config JSONB
+        migrated = client.put(
+            f"/api/v1/connections/{legacy_id}",
+            json={
+                "name": "legacy-pg-migrated",
+                "credentialAction": "replace",
+                "credentials": {"username": "ro_user", "password": "pg_pw_v2"},
+            },
+        )
+        assert migrated.status_code == 200
+        assert "username" not in db_conn.connections[legacy_id]["config"]
+
 
 def test_stateless_mode_remains_operational_for_task03() -> None:
     app = create_app(
